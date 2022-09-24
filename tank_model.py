@@ -50,11 +50,12 @@ def z_factor(my_temp,my_pressure):
     X_Final = np.linspace(Pr_range.min(), Pr_range.max(), 250)
     Y_Final = B_spline_coeff(X_Final)
     plt.plot(X_Final,Y_Final)
-    plt.legend
+    plt.legend()
     plt.xlabel('$P_r$ atm')
     plt.ylabel('Z')
     plt.xlim([0, 7])
     plt.ylim([0, 1.2])
+    plt.show()
     #print(P_range[0]*v[0]/(R * my_temp))
     return Pr_range[0]*Pc*v[0]/(R * my_temp)
     
