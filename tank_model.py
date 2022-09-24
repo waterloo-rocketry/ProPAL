@@ -12,7 +12,7 @@ b = R * Tc / (8 * Pc)
 
 
 
-def z_factor(my_temp,my_pressure):
+def z_factor(my_temp,my_pressure, perform_plotting=True):
 
     Pr = my_pressure/Pc #reduced pressure 
     Tr= my_temp/Tc #reduced temp
@@ -25,7 +25,11 @@ def z_factor(my_temp,my_pressure):
     Pr_range = np.linspace(0.05, 7) #defining the range of the solution 
     v = [fsolve(function_gas,1, args=(Pr,))[0] for Pr in Pr_range] # solve for the Volume in non-ideal gas formula for all the pressure range 
     P_range = Pr_range * Pc #pressure range to find all the z factors with specifed range
-    Z = P_range * v/ (R * my_temp) #calculate Z factor 
+    Z = P_range * v/ (R * my_temp) #calculate Z factor
+
+    if not perform_plotting:
+        return Pr_range[0]*Pc*v[0]/(R * my_temp)
+
     #print(Pr_range)
     ax = plt.subplot(1, 1, 1)
 
@@ -55,12 +59,16 @@ def z_factor(my_temp,my_pressure):
     plt.ylabel('Z')
     plt.xlim([0, 7])
     plt.ylim([0, 1.2])
-    plt.show()
+
     #print(P_range[0]*v[0]/(R * my_temp))
     return Pr_range[0]*Pc*v[0]/(R * my_temp)
     
-for t in range(330,650,20):
-    z_factor(t,1)
+
+if __name__ == '__main__':
+    for t in range(330,650,20):
+        z_factor(t,1)
+    
+    plt.show()
 
 
 

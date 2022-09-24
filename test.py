@@ -1,9 +1,14 @@
 # Source document
 # http://www.aspirespace.org.uk/downloads/Modelling%20the%20nitrous%20run%20tank%20emptying.pdf
 
+from contextlib import suppress
 from math import sqrt
 from math import exp, pi
 import matplotlib.pyplot as plt
+
+# Project imports
+
+from tank_model import z_factor
 
 DEBUG_VERBOSE = False
 
@@ -138,85 +143,118 @@ class NOS:
         self.pressure = self.NOS_vapor_pressure(self.temperature)
         self.calc_densities()
 
-    @staticmethod
-    def calc_temperature_during_vap_only(T_prev, m_prev, Z_prev, Z, m):
+    
+    def calc_temperature_during_vap_only(self, T_prev, m_prev, Z_prev, Z, m):
         eqn_exponent = (ratio_of_specific_heats_gamma - 1)
         return T_prev*(((Z*m)/(Z_prev*m_prev))**(eqn_exponent))
 
-    @staticmethod
-    def calc_pressure_during_vap_only(T_prev, P_prev, T):
+    
+    def calc_pressure_during_vap_only(self, T_prev, P_prev, T):
         eqn_exponent = (ratio_of_specific_heats_gamma - 1)/ratio_of_specific_heats_gamma
         return ((T)/(T_prev))**(1/(eqn_exponent))*P_prev
 
-    def execute_vapor_phase_state(self):
-        previous_Z = self.basic_compressibility(self.temperature, self.pressure)
+    def execute_vapor_phase_state(self, suppress_prints=True):
+        previous_Z = z_factor(self.temperature, self.pressure, perform_plotting=False)
         previous_vapor_mass = self.mass_vapor + self.massflow
         guess_Z = previous_Z
         exit_flag = False
+
+        z_iter_count = 0
+        conv_step = 10/9
+        ITER_LIMIT = 1000
+
         while not exit_flag:
             iter_T = self.calc_temperature_during_vap_only(self.temperature, previous_vapor_mass,
                                                     previous_Z, guess_Z,
-                                                    self.mass_vapor,  
-                                                    ratio_of_specific_heats_gamma) 
+                                                    self.mass_vapor) 
 
-            iter_P = self.calc_pressure_during_vap_only(self.temperature, iter_T)
-            iter_Z = self.basic_compressibility(self.temperature, self.pressure)
+            iter_P = self.calc_pressure_during_vap_only(self.temperature, self.pressure, iter_T)
+            
+            iter_Z = z_factor(iter_T, iter_P, perform_plotting=False)
+
+            if (z_iter_count  % 5 == 0 and not suppress_prints):
+                print('Iteration T:' + str(iter_T) + ' Iteration P:' +\
+                        str(iter_P) + ' delta_Z: ' + str(guess_Z - iter_Z) + ' Iter Count: ' + str(z_iter_count))
 
             # Convergence achieved
-            if abs(iter_Z - guess_Z) < 0.00005:
+            if abs(iter_Z - guess_Z) < 0.000005:
                 exit_flag = True
                 self.pressure = iter_P
                 self.temperature = iter_T
+                return True
 
             # Adjust guess based on relative size
-            if iter_Z < guess_Z:
-                guess_Z = guess_Z*(10/9) 
-            elif iter_Z > guess_Z:
-                guess_Z = guess_Z*(19/20) 
+            if iter_Z > guess_Z:
+                guess_Z = guess_Z*conv_step 
+            elif iter_Z < guess_Z:
+                guess_Z = guess_Z/conv_step 
+            conv_step = conv_step**(0.8)
+
+            # Check for convergence failure
+            z_iter_count += 1
+            if z_iter_count > ITER_LIMIT:
+                print('Failed to converge while iterating Z')
+                exit_flag = True
+                return False
 
 
-    def execute_vapack(self, time_step):
+
+
+    def execute_vapack(self, time_step, suppress_prints=False):
 
         curr_cc_pressure = self.calculate_CC_pressure(self.pressure)
-        print("Iter CC Pressure: " + str(curr_cc_pressure))
+
+
+
 
         interval_massflow = self.calculate_injector_massflow(self.pressure, curr_cc_pressure)
         delta_system_mass = time_step * interval_massflow
 
         self.massflow = delta_system_mass
 
-        if self.mass_liquid <= 0:
+        if self.mass_liquid <= 0: # Final stage of burn; vapor-only expansion
+            
             
             self.mass_liquid = 0
             self.mass_vapor -= self.massflow
-            self.execute_vapor_phase_state()
+            no_error = self.execute_vapor_phase_state(suppress_prints=True)
+            self.calc_densities()
 
-            if self.mass_vapor <= 0:
-                return False
-            else:
-                return True
-            
+            if not no_error:
+                return -3
+
+
+        else: # Standard first burn stage, gas-liquid equilibrium in tank
 
         # Prior to accounting for nitrous vaporization to account 
-        self.mass_liquid -= delta_system_mass 
-        curr_system_mass = self.mass_liquid + self.mass_vapor
+            self.mass_liquid -= delta_system_mass 
+            curr_system_mass = self.mass_liquid + self.mass_vapor
 
-        true_liquid_mass = (self.volume  - (curr_system_mass / self.density_vapor))/ \
-                (self.density_liquid**(-1) - self.density_vapor**(-1))
+            true_liquid_mass = (self.volume  - (curr_system_mass / self.density_vapor))/ \
+                    (self.density_liquid**(-1) - self.density_vapor**(-1))
 
-        mass_vaporized = self.mass_liquid - true_liquid_mass
+            mass_vaporized = self.mass_liquid - true_liquid_mass
 
 
-        self.mass_vapor +=  mass_vaporized
-        self.mass_liquid = true_liquid_mass
+            self.mass_vapor +=  mass_vaporized
+            self.mass_liquid = true_liquid_mass
+            
+            self.execute_repressurization_cooling(mass_vaporized)
+
+
+            if self.mass_liquid <= 0:
+                print("Liquid Exhausted")
+                self.mass_liquid = 0
+
+        if not suppress_prints:
+            print("Iter CC Pressure: " + str(curr_cc_pressure))
         
-        self.execute_repressurization_cooling(mass_vaporized)
+        if self.mass_vapor <= 0:
+            return -1
+        elif curr_cc_pressure < 1: 
+            return 0 # CC pressure below atmospheric, gas expansion ceases
 
-        if mass_vaporized < 0:
-            return False # Negative vaporization mass means burnout
-
-
-        return True
+        return 1 # Ready to continue iterating
 
 
     def __init__(self, V_0, P_0, T_0, m_0, basic_ullage) -> None:
@@ -251,29 +289,49 @@ if __name__ == "__main__":
     pressure_probe = []
     temp_probe = []
     mass_flow_probe = []
+    mass_probe = []
     TIME_STEP = 0.05
 
 
     while (iter_count < 10000 and not exit_flag):
-        exit_flag = not NOS_model.execute_vapack(TIME_STEP)
+        suppress_prints = True
+        if iter_count % 1 == 0:
+            suppress_prints = False
+            print('Simulation time: ' + str(sim_time), end=' | ')
+
+        status = NOS_model.execute_vapack(TIME_STEP,suppress_prints=suppress_prints)
+
+        if status <= 0:
+            exit_flag = True
+
         sim_time += TIME_STEP
+        sim_time = round(sim_time, 4)
 
         timestamps.append(sim_time)
         pressure_probe.append(NOS_model.pressure)
         temp_probe.append(NOS_model.temperature)
-        mass_flow_probe.append(NOS_model.massflow)
+        mass_flow_probe.append(NOS_model.massflow*100) # To scale simulation better
+        mass_probe.append(NOS_model.mass_liquid + NOS_model.mass_vapor)
+        
 
 
         iter_count += 1
 
         if exit_flag:
-            print("Terminated due to burnout")
+            print("Terminated ", end = '')
+            if status == -3:
+                print('due to convergence failure while calculating Z')
+            elif status == 0:    
+                print("due to standard exit condition (CC pressure below atmospheric)")    
+            else:
+                print('due to nonstandard exit condition')
+
             print("Simulation time: " + str(sim_time))
 
             if (DEBUG_VERBOSE):
                 print(pressure_probe)
                 print(temp_probe)
-                print(mass_flow_probe)
+                print(mass_flow_probe) 
 
             plt.plot(timestamps, pressure_probe, label = 'Pressure')
             plt.plot(timestamps, temp_probe, label = 'Temperature')
@@ -285,7 +343,7 @@ if __name__ == "__main__":
 
             
     if iter_count >= 998:
-        print("Iteration Count exceeded")
+        print("Main loop iteration count exceeded")
 
 
 
