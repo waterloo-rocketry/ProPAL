@@ -138,10 +138,41 @@ class NOS:
         self.pressure = self.NOS_vapor_pressure(self.temperature)
         self.calc_densities()
 
-    def execute_vapor_phase_state(self):
-        initial_z = self.basic_compressibility(self.temperature, self.pressure)
+    @staticmethod
+    def calc_temperature_during_vap_only(T_prev, m_prev, Z_prev, Z, m):
+        eqn_exponent = (ratio_of_specific_heats_gamma - 1)
+        return T_prev*(((Z*m)/(Z_prev*m_prev))**(eqn_exponent))
 
-        return True
+    @staticmethod
+    def calc_pressure_during_vap_only(T_prev, P_prev, T):
+        eqn_exponent = (ratio_of_specific_heats_gamma - 1)/ratio_of_specific_heats_gamma
+        return ((T)/(T_prev))**(1/(eqn_exponent))*P_prev
+
+    def execute_vapor_phase_state(self):
+        previous_Z = self.basic_compressibility(self.temperature, self.pressure)
+        previous_vapor_mass = self.mass_vapor + self.massflow
+        guess_Z = previous_Z
+        exit_flag = False
+        while not exit_flag:
+            iter_T = self.calc_temperature_during_vap_only(self.temperature, previous_vapor_mass,
+                                                    previous_Z, guess_Z,
+                                                    self.mass_vapor,  
+                                                    ratio_of_specific_heats_gamma) 
+
+            iter_P = self.calc_pressure_during_vap_only(self.temperature, iter_T)
+            iter_Z = self.basic_compressibility(self.temperature, self.pressure)
+
+            # Convergence achieved
+            if abs(iter_Z - guess_Z) < 0.00005:
+                exit_flag = True
+                self.pressure = iter_P
+                self.temperature = iter_T
+
+            # Adjust guess based on relative size
+            if iter_Z < guess_Z:
+                guess_Z = guess_Z*(10/9) 
+            elif iter_Z > guess_Z:
+                guess_Z = guess_Z*(19/20) 
 
 
     def execute_vapack(self, time_step):
@@ -155,9 +186,11 @@ class NOS:
         self.massflow = delta_system_mass
 
         if self.mass_liquid <= 0:
-            self.mass_liquid = 0
-            self.execute_vapor_phase_state()
             
+            self.mass_liquid = 0
+            self.mass_vapor -= self.massflow
+            self.execute_vapor_phase_state()
+
             if self.mass_vapor <= 0:
                 return False
             else:
