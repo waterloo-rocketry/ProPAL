@@ -138,11 +138,11 @@ class NOS:
         self.pressure = self.NOS_vapor_pressure(self.temperature)
         self.calc_densities()
 
-    def execute_vapor_phase_state(self)
+    def execute_vapor_phase_state(self):
         initial_z = self.basic_compressibility(self.temperature, self.pressure)
 
-        
-        while
+        return True
+
 
     def execute_vapack(self, time_step):
 
