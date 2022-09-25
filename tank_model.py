@@ -13,7 +13,7 @@ b = R * Tc / (8 * Pc)
 
 
 def z_factor(my_temp,my_pressure, perform_plotting=True):
-
+    # return 1
     Pr = my_pressure/Pc #reduced pressure 
     Tr= my_temp/Tc #reduced temp
     
