@@ -7,9 +7,16 @@ from math import exp, pi
 import matplotlib.pyplot as plt
 from numpy import interp
 
+# This doesn't quite work yet, will figure out why later
+from NOSThermo import NOSThermo
+
+# This also errors out when I try it
+from tank_model import z_factor
+
+
 # Project imports
 
-from tank_model import z_factor
+
 
 DEBUG_VERBOSE = False
 
@@ -27,7 +34,7 @@ class NOS:
     def sus_Z(self, P):
         """
         The incredibly suspicious way that Rick Newlands chooses to calculate his Z, but it is super simple and
-        computationally forgiving, is being used until we optimize stuff
+        computationally forgiving, is being used until we optimize stuff. Also nothing else works super well yet
         """
         return interp(P, [0.0, pCrit], [1.0, ZCrit])
 
@@ -225,8 +232,11 @@ class NOS:
         This process is detailed throughly by Rick Newlands, but it may be worth improving in the future.
         """
 
-        # previous_Z = z_factor(self.temperature, self.pressure, perform_plotting=False)
+
         previous_Z = self.sus_Z(self.pressure)
+        
+        #thermo = NOSThermo()
+        #previous_Z = thermo.Z(self.density_vapor, self.temperature)
 
         previous_vapor_mass = self.mass_vapor + self.interval_delta_mass
         guess_Z = previous_Z
@@ -234,7 +244,9 @@ class NOS:
 
         z_iter_count = 0
         conv_step = 10/9
-        ITER_LIMIT = 1000
+        ITER_LIMIT = 100000
+
+        aim = 0
 
         while not exit_flag:
             iter_T = self.calc_temperature_during_vap_only(self.temperature, previous_vapor_mass,
@@ -245,6 +257,7 @@ class NOS:
             
             # iter_Z = z_factor(iter_T, iter_P, perform_plotting=False)
             iter_Z = self.sus_Z(iter_P)
+            # iter_Z = thermo.Z(self.density_vapor, iter_T)
 
             if (z_iter_count  % 5 == 0 and not suppress_prints):
                 print('Iteration T:' + str(iter_T) + ' Iteration P:' +\
@@ -261,12 +274,17 @@ class NOS:
                 return True
 
             # Adjust guess based on relative size
+            oldAim = aim
             if iter_Z > guess_Z:
-                guess_Z = guess_Z*conv_step 
+                guess_Z = guess_Z*conv_step
+                aim = -1
             elif iter_Z < guess_Z:
                 guess_Z = guess_Z/conv_step 
+                aim = 1
+            
+            if aim == -oldAim:
+                conv_step = sqrt(conv_step)
 
-            conv_step = conv_step**(0.75) # Cool the step size as the program proceeds to converge
 
             # Check for convergence failure
             z_iter_count += 1
