@@ -25,10 +25,18 @@ ratio_of_specific_heats_gamma = 1.3
 class NOS:
 
     def sus_Z(self, P):
-        return interp(P, [pCrit, ZCrit],[0.0, 1.0])
+        """
+        The incredibly suspicious way that Rick Newlands chooses to calculate his Z, but it is super simple and
+        computationally forgiving, is being used until we optimize stuff
+        """
+        return interp(P, [0.0, pCrit], [1.0, ZCrit])
 
     # Nitrous oxide vapour pressure, Bar
     def NOS_vapor_pressure(self, T_Kelvin):
+        """
+        Shamelessly stolen from the Rick Newlands paper (converted from cpp to python 
+        with some var names cleaned up)
+        """
 
         p = [1.0, 1.5, 2.5, 5.0]
         b = [-6.71893, 1.35966, -1.3779, -4.051]
@@ -44,6 +52,10 @@ class NOS:
 
     # Nitrous oxide saturated liquid density, kg/m3 
     def NOS_liquid_density_saturated(self, T_Kelvin):
+        """
+        Shamelessly stolen from the Rick Newlands paper (converted from cpp to python 
+        with some var names cleaned up)
+        """
     
         b = [1.72328, -0.8395, 0.5106, -0.10412]
 
@@ -57,6 +69,11 @@ class NOS:
         return rhoCrit * exp(acc)
 
     def NOS_vapor_density_saturated(self, T_Kelvin):        
+        """
+        Shamelessly stolen from the Rick Newlands paper (converted from cpp to python 
+        with some var names cleaned up)
+        """
+
         b = [-1.009, -6.28792, 7.50332, -7.90463, 0.629427]
 
         Tr = T_Kelvin / tCrit
@@ -68,6 +85,10 @@ class NOS:
         return rhoCrit * exp(acc)
         
     def NOS_enthlapy_of_vaporization(self, T_Kelvin):
+        """
+        Shamelessly stolen from the Rick Newlands paper (converted from cpp to python 
+        with some var names cleaned up)
+        """
 
         bL = [-200.0, 116.043, -917.225, 794.779, -589.587]
         bV = [-200.0, 440.055, -459.701, 434.081, -485.338]
@@ -89,6 +110,10 @@ class NOS:
         return(bob)
     
     def NOS_isobaric_heat_capacity(self, T_Kelvin):
+        """
+        Shamelessly stolen from the Rick Newlands paper (converted from cpp to python 
+        with some var names cleaned up)
+        """
         b = [2.49973, 0.023454, -3.80136, 13.0945, -14.518]
         Tr = T_Kelvin / tCrit
         Tr_minus_one = 1.0 - Tr
@@ -107,14 +132,27 @@ class NOS:
     #     return 1
 
     def calculate_CC_pressure(self, tank_pressure):
+        """
+        Temporary ballpark estimate until we get an actual Combustion Chamber model running
+        """
         return tank_pressure*0.5
     
     def calculate_loss_factor(self, loss_coeff):
+        """
+        Calculate the flow losses 
+        """
+
         NUM_ORIFICES = 36
         ORIFICE_DIAM = 0.003 # 3mm
-        MAGIC_ASPIRESPACE_LOSS_COEFF = 2*30
+
+        # not currently used, we started picking values to match massflow, see comment above func. call
+        MAGIC_ASPIRESPACE_LOSS_COEFF = 2*30 
 
         # Diameter is not squared, this may be wrong, needs further investigation
+
+        # ^ That was actually corrected, but all of this is still incredibly sketch, needs more
+        # investigation
+
         loss_factor = loss_coeff/((0.25*pi*(ORIFICE_DIAM**(2))*NUM_ORIFICES)**2)
         return loss_factor
 
@@ -137,6 +175,9 @@ class NOS:
     
 
     def execute_repressurization_cooling(self, mass_vaporized):
+        """
+        Account for the energy required to vaporize the gas as the tank empties in the saturated phase
+        """
         curr_enthlapy = self.NOS_enthlapy_of_vaporization(self.temperature)
         curr_C_liquid = self.NOS_isobaric_heat_capacity(self.temperature)
         
@@ -153,22 +194,40 @@ class NOS:
 
     
     def calc_temperature_during_vap_only(self, T_prev, m_prev, Z_prev, Z, m):
+        """
+        Use the isentropic gas depressurization formulas to calculate temperature
+        """
+
         eqn_exponent = (ratio_of_specific_heats_gamma - 1)
         return T_prev*(((Z*m)/(Z_prev*m_prev))**(eqn_exponent))
     
     def calc_pressure_during_vap_only(self, T_prev, P_prev, T):
+        """
+        Use the isentropic gas depressurization formulas to calculate pressure
+        """
+
         eqn_exponent = (ratio_of_specific_heats_gamma - 1)/ratio_of_specific_heats_gamma
         return ((T)/(T_prev))**(1/(eqn_exponent))*P_prev
 
     def calc_density_during_vap_only(self, T_prev, rho_prev, T):
+        """
+        Use the isentropic gas depressurization formulas to calculate vapor density
+        """
+
         eqn_exponent = 1.0/(ratio_of_specific_heats_gamma - 1.0)
         return rho_prev * ((T/T_prev)**(eqn_exponent))
 
 
-
     def execute_vapor_phase_state(self, suppress_prints=True):
+        """
+        Handles the ideal isentropic venting state, which requires an iterative process for finding the right Z.
+
+        This process is detailed throughly by Rick Newlands, but it may be worth improving in the future.
+        """
+
         # previous_Z = z_factor(self.temperature, self.pressure, perform_plotting=False)
         previous_Z = self.sus_Z(self.pressure)
+
         previous_vapor_mass = self.mass_vapor + self.interval_delta_mass
         guess_Z = previous_Z
         exit_flag = False
@@ -192,12 +251,13 @@ class NOS:
                         str(iter_P) + ' delta_Z: ' + str(guess_Z - iter_Z) + ' Iter Count: ' + str(z_iter_count))
 
             # Convergence achieved
-            if abs(iter_Z - guess_Z) < 0.005:
+            if abs(iter_Z - guess_Z) < 0.000001:
                 # print('Z Guess: ' + str(iter_Z))
                 exit_flag = True
                 self.pressure = iter_P
                 self.previous_temperature = self.temperature
                 self.temperature = iter_T
+                # print("Number of Z iterations: " + str(z_iter_count) + " Calculated Z value: " + str(iter_Z))
                 return True
 
             # Adjust guess based on relative size
@@ -205,7 +265,8 @@ class NOS:
                 guess_Z = guess_Z*conv_step 
             elif iter_Z < guess_Z:
                 guess_Z = guess_Z/conv_step 
-            conv_step = conv_step**(0.8)
+
+            conv_step = conv_step**(0.75) # Cool the step size as the program proceeds to converge
 
             # Check for convergence failure
             z_iter_count += 1
@@ -218,9 +279,16 @@ class NOS:
 
 
     def execute_vapack(self, time_step, suppress_prints=False):
+        """
+        Execute a single cycle of tank blowdown under self-pressurization. 
+
+        This is referred by Rick Newlands as 'Vapak'
+        """
 
         curr_cc_pressure = self.calculate_CC_pressure(self.pressure)
 
+        # These numbers were adjusted ad-hoc while we were in the bar with help from Cristian B. and Aaron L. to roughly
+        # match the massflow of our engine, this will need to be looked at later in more detail
         if self.mass_liquid > 0:
             interval_massflow = self.calculate_injector_massflow(self.pressure, curr_cc_pressure, self.density_liquid, 80)
         else:
@@ -232,10 +300,15 @@ class NOS:
         previous_massflow = self.massflow
         previous_delta_mass = self.interval_delta_mass
 
-        # Aspirespace paper doesn't use the first term, and I can't get it to work like that anyway
-        # delta_system_mass = time_step * interval_massflow
+        # Aspirespace paper doesn't use the first term of the Adams-Bashford, and I can't get it to work like that anyway
+        # This is now essentially copypasta from the example code (link restated for convenience) 
+        # http://www.aspirespace.org.uk/downloads/Modelling%20the%20nitrous%20run%20tank%20emptying.pdf
+        # (Page 14)
+
         delta_system_mass = time_step * ((3/2)*interval_massflow - (1/2)*previous_massflow)
 
+        # Alternative (non-integrated) form also seems like it might work, leaving it here:
+        #delta_system_mass = time_step * interval_massflow
 
         self.massflow = interval_massflow
         self.interval_delta_mass = delta_system_mass
@@ -248,13 +321,16 @@ class NOS:
             no_error = self.execute_vapor_phase_state(suppress_prints=True)
             self.density_vapor = self.calc_density_during_vap_only(self.previous_temperature, self.density_vapor, self.temperature)
 
-            if not no_error:
+            if self.pressure <= 2.5: # Random bullshit number pulled out of thin air by Rick Newlands to stop the burn at 
+                return 2
+
+            if not no_error: # There be errors
                 return -3
 
 
         else: # Standard first burn stage, gas-liquid equilibrium in tank
 
-        # Prior to accounting for nitrous vaporization to account 
+            # Prior to accounting for nitrous vaporization to account 
             self.prev_mass_liquid = self.mass_liquid
             self.mass_liquid -= delta_system_mass 
             curr_system_mass = self.mass_liquid + self.mass_vapor
@@ -264,6 +340,8 @@ class NOS:
                 print('Calculated Vapor Density: ' + str(self.density_vapor), end = ' ')
                 print('Calculated Liquid Density ' + str(self.density_liquid))
 
+            # Actual mass of the liquid in the tank determined based on liquid-gas equilibrium in the tank
+            # given reduced overall system mass    
             true_liquid_mass = (self.volume  - (curr_system_mass / self.density_vapor))/ \
                     (self.density_liquid**(-1) - self.density_vapor**(-1))
 
@@ -271,6 +349,7 @@ class NOS:
                 print('Prevaporized liquid mass: ' + str(self.mass_liquid), end = ' ')
                 print('True liquid mass: '+ str(true_liquid_mass))
 
+            # The difference in masses is the liquid that would be vporized to maintain vapor pressure
             mass_vaporized = self.mass_liquid - true_liquid_mass
 
 
@@ -279,7 +358,8 @@ class NOS:
 
             # Record first-order lagging vapor mass value to account for vaporization time of the nitrous
             # In the same way as is done in the aspirespace paper
-            
+            # Also without this the numerical model eats shit and begins to oscillate and die
+
             self.lagging_vaporized_mass += (time_step/0.15) * (mass_vaporized - self.lagging_vaporized_mass)
             self.execute_repressurization_cooling(self.lagging_vaporized_mass)
 
@@ -303,7 +383,13 @@ class NOS:
 
 
     def __init__(self, V_0, P_0, T_0, m_0, basic_ullage) -> None:
-        
+        """
+        Sets the intial conditions. 
+
+        NOTE/TODO: the pressure and mass are a function of the other values, and they are not actually necessary.
+        However, they might still have utility for providing values/performing checks. Decide this later. 
+        """
+
         self.ullage = basic_ullage
         self.temperature = T_0
         self.volume = V_0
@@ -332,7 +418,8 @@ if __name__ == "__main__":
     exit_flag = False
     iter_count = 0
 
-    NOS_model = NOS(0.04, 55, 298, 40, 0.15)
+    # Initialize NOS model
+    NOS_model = NOS(0.04, 55, 288, 40, 0.15)
 
     sim_time = 0
     timestamps = []
@@ -344,18 +431,18 @@ if __name__ == "__main__":
     vapor_mass_probe = []
     lagging_vaporized_probe = []
 
-    TIME_STEP = 0.001
+    TIME_STEP = 0.0001
     ITER_LIMIT = 1000000
 
     while (iter_count < ITER_LIMIT and not exit_flag):
         suppress_prints = True
-        if iter_count % 100 == 0:
+        if iter_count % 1000 == 0:
             suppress_prints = False
             print('Simulation time: ' + str(sim_time), end=' | ')
 
         status = NOS_model.execute_vapack(TIME_STEP,suppress_prints=suppress_prints)
 
-        if status <= 0:
+        if status <= 0 or status == 2:
             exit_flag = True
 
         sim_time += TIME_STEP
@@ -378,7 +465,9 @@ if __name__ == "__main__":
             if status == -3:
                 print('due to convergence failure while calculating Z')
             elif status == 0:    
-                print("due to standard exit condition (CC pressure below atmospheric)")    
+                print("due to standard exit condition (CC pressure below atmospheric)") 
+            elif status == 2:
+                print("due to Rick Newland's Magic 2.5 Bar vapor pressure criteria")   
             else:
                 print('due to nonstandard exit condition')
 
@@ -403,7 +492,7 @@ if __name__ == "__main__":
             plt.show()
 
             
-    if iter_count >= 998:
+    if iter_count >= (ITER_LIMIT - 1):
         print("Main loop iteration count exceeded")
 
 
