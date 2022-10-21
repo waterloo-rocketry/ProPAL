@@ -11,7 +11,7 @@ from numpy import interp
 from NOSThermo import NOSThermo
 
 # This also errors out when I try it
-from tank_model import z_factor
+from z_factor import z_factor
 
 
 # Project imports
@@ -29,7 +29,7 @@ ratio_of_specific_heats_gamma = 1.3
 
 
 
-class NOS:
+class NOS_tank:
 
     def sus_Z(self, P):
         """
@@ -362,7 +362,7 @@ class NOS:
             # given reduced overall system mass    
             true_liquid_mass = (self.volume  - (curr_system_mass / self.density_vapor))/ \
                     (self.density_liquid**(-1) - self.density_vapor**(-1))
-
+            
             if not suppress_prints:
                 print('Prevaporized liquid mass: ' + str(self.mass_liquid), end = ' ')
                 print('True liquid mass: '+ str(true_liquid_mass))
@@ -379,7 +379,8 @@ class NOS:
             # Also without this the numerical model eats shit and begins to oscillate and die
 
             self.lagging_vaporized_mass += (time_step/0.15) * (mass_vaporized - self.lagging_vaporized_mass)
-            self.execute_repressurization_cooling(self.lagging_vaporized_mass)
+            if self.lagging_vaporized_mass > 0:
+                self.execute_repressurization_cooling(self.lagging_vaporized_mass)
 
 
             if self.mass_liquid <= 0:
@@ -387,8 +388,8 @@ class NOS:
                 self.mass_liquid = 0
 
         if not suppress_prints:
-            print("Iter CC Pressure: " + str(curr_cc_pressure), end = ' ')
-            print('Massflow: ' + str(self.massflow))
+            print("Iter CC Pressure: " + str(curr_cc_pressure), end = ' bar ')
+            print('Oxidizer Massflow From Tank: ' + str(self.massflow))
             print("Iter Fluid Temperature: " + str(self.temperature))
             
         
@@ -437,7 +438,7 @@ if __name__ == "__main__":
     iter_count = 0
 
     # Initialize NOS model
-    NOS_model = NOS(0.04, 55, 288, 40, 0.15)
+    NOS_model = NOS_tank(0.04, 55, 288, 40, 0.15)
 
     sim_time = 0
     timestamps = []
@@ -449,7 +450,7 @@ if __name__ == "__main__":
     vapor_mass_probe = []
     lagging_vaporized_probe = []
 
-    TIME_STEP = 0.0001
+    TIME_STEP = 0.1
     ITER_LIMIT = 1000000
 
     while (iter_count < ITER_LIMIT and not exit_flag):
