@@ -6,21 +6,20 @@ import matplotlib.pyplot as plt
 import cantera as ct
 
 class N2O_HTPB_ThermochemistryModel:
-
-    def __init__(self) -> None:
-        self.gas_model = ct.Solution('CanteraModels/Mevel2015-rocketry_modified.yaml')
+    gas_model = ct.Solution('CanteraModels/Mevel2015-rocketry_modified.yaml')
     
-    
-    def sim_gas_mixture_combustion_temp(self, OF_ratio, temperature_K, pressure_Pa) -> float:
+    @staticmethod
+    def sim_gas_mixture_combustion_temp(OF_ratio, temperature_K, pressure_Pa) -> float:
 
         # This requires a download of a NASA file and some alteration to
         # get it to compile correctly
 
-        self.gas_model.TPY = temperature_K, pressure_Pa, f'N2O:{OF_ratio}, C4H6:1'
+        N2O_HTPB_ThermochemistryModel.gas_model.TPY = temperature_K, pressure_Pa, f'N2O:{OF_ratio}, C4H6:1'
 
-        self.gas_model.equilibrate('HP')
+        N2O_HTPB_ThermochemistryModel.gas_model.equilibrate('HP')
 
-        return self.gas_model
+        return N2O_HTPB_ThermochemistryModel.gas_model
+
 
 class CombustionChamberModel:
 
@@ -128,7 +127,7 @@ class EngineModel:
         
         self.area_ratio = area_ratio
         self.combusted_gas = 'not-simulated'
-        self.thermo_model = N2O_HTPB_ThermochemistryModel()
+
 
     @classmethod
     def reverse_mog_exit_pressure(cls, area_ratio, p1, k):
@@ -211,7 +210,7 @@ class EngineModel:
         start_time = perf_counter()
         if (self.combusted_gas == 'not-simmed' or update_thermochem):
             self.combusted_gas = \
-                    self.thermo_model.sim_gas_mixture_combustion_temp(\
+                    N2O_HTPB_ThermochemistryModel.sim_gas_mixture_combustion_temp(\
                     OF_ratio=OF_ratio, temperature_K = 298, 
                     pressure_Pa = bar_to_Pa*(self.tank_model.pressure/2))
         print('Cantera calculation time: ' + str(perf_counter() - start_time))
@@ -272,6 +271,7 @@ if __name__ == '__main__':
     SIM_STEP = 0.025
     step_count = 0 
 
+    st = perf_counter()
     while sim_ok:
 
         sim_thermochem = True
@@ -288,6 +288,9 @@ if __name__ == '__main__':
             thrust_values.append(thrust_value)
             timestamps.append(sim_time)
 
+    print()
+    print()
+    print('Total Cantera calculation time: ' + str(perf_counter() - st))
     plt.plot(timestamps, thrust_values)
     plt.title('Thrust curve')
     plt.show()
