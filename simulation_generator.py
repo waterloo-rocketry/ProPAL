@@ -4,6 +4,7 @@ from tank_blowdown_model import NOS_tank
 from engine_model import CombustionChamberModel, N2O_HTPB_ThermochemistryModel
 
 import math
+import decimal
 import numpy as np
 
 from itertools import product
@@ -19,7 +20,10 @@ class SimulationGenerator:
       os.mkdir(folderpath)
     print('SimulationGenerator will save to:', os.path.abspath(self.folderpath))
     
-  
+  def get_precision(self, number):
+    if number >= 1: return 0
+    return -decimal.Decimal(str(number)).as_tuple().exponent
+
   # params: a dictionary of keys (str) and ranges ([min, max, stepsize] arrays)
   # cantera_function: a function that should take the same # of params as your params param does (lol). This is the
   #   fn you want to optimize away
@@ -39,14 +43,16 @@ class SimulationGenerator:
     iters = []
     for _,val in params.items():
       temp = []
+      # get precision 
+      precision = self.get_precision(val[2])
       for x in np.linspace(val[0], val[1], int((val[1]-val[0])/val[2] + 1)):
-        temp.append(x)
+        temp.append(round(x, precision))
       iters.append(temp)
-      writer.writerow(temp)
+      # writer.writerow(temp)
 
-    # for item in product(*iters):
-    #   result = cantera_function(*item)
-    #   writer.writerow([*item, result.P, result.cv, result.cp, result.T])
+    for item in product(*iters):
+      # result = cantera_function(*item)
+      writer.writerow([*item])
 
     print("writing done")
     f.close()
@@ -72,7 +78,7 @@ sg = SimulationGenerator('.')
 stuff = {
   'OF_ratio': [1.000, 5.000, .2],
   'temperature_K': [290, 310, 0.5], 
-  'pressure_Pa': [10000, 20000, 50]
+  'pressure_Pa': [10000, 20000, 100]
 }
 
 sg.generate_lookup(stuff, N2O_HTPB_ThermochemistryModel.sim_gas_mixture_combustion_temp)
