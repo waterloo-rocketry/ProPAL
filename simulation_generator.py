@@ -1,10 +1,12 @@
 import csv
 import os
 from tank_blowdown_model import NOS_tank
-from engine_model import CombustionChamberModel
+from engine_model import CombustionChamberModel, N2O_HTPB_ThermochemistryModel
 
 import math
 import numpy as np
+
+from itertools import product
 
 #########################################################################################################
 
@@ -19,24 +21,45 @@ class SimulationGenerator:
     
   
   # params: a dictionary of keys (str) and ranges ([min, max, stepsize] arrays)
+  # cantera_function: a function that should take the same # of params as your params param does (lol). This is the
+  #   fn you want to optimize away
   # filepath: the path to save the file to
 
-  def generate_lookup(self, params):
-    self.filename = self.folderpath + '/SG-' + '-'.join([key for key in params]) + '---' + '-'.join([str(v) for _,value in params.items() for v in value]) + '.csv'
-    print(self.filename)
-    if os.path.exists(self.filename):
-      print("file exists at", self.filename)
+  def generate_lookup(self, params, cantera_function):
+    filename = self.folderpath + '/SG-' + '-'.join([key for key in params]) + '---' + '-'.join([str(v) for _,value in params.items() for v in value]) + '.csv'
+    print(filename)
+    if os.path.exists(filename):
+      print("file exists at", filename)
       return 
     
-    f = open(self.filename, 'w')
+    f = open(filename, 'w')
     writer = csv.writer(f)
-    writer.writerow([key for key in params])
+    writer.writerow([*[key for key in params], 'P', 'CV', 'CP', 'T'])
 
-    for key,val in params.items():
-      for x in np.arange(val[0], val[1]+val[2], val[2]):
-        print(x)
+    iters = []
+    for _,val in params.items():
+      temp = []
+      for x in np.linspace(val[0], val[1], int((val[1]-val[0])/val[2] + 1)):
+        temp.append(x)
+      iters.append(temp)
+      writer.writerow(temp)
+
+    # for item in product(*iters):
+    #   result = cantera_function(*item)
+    #   writer.writerow([*item, result.P, result.cv, result.cp, result.T])
+
+    print("writing done")
+    f.close()
+
     
-    
+  # function below is solely for testing purposes
+  def remove_lookup(self, params): 
+    filename = self.folderpath + '/SG-' + '-'.join([key for key in params]) + '---' + '-'.join([str(v) for _,value in params.items() for v in value]) + '.csv'
+    if os.path.exists(filename):
+      os.remove(filename)
+      print(filename, "removed.")
+    else: 
+      print(filename, "does not exist at", self.folderpath + '/')
     
 
 
@@ -44,25 +67,13 @@ class LookUpTable:
   def __init__(self) -> None: 
     pass
 
-# k imma make it a CSV actually bc import to excel and also lots of values r easier to parse with it
-# NOS_tank_params = [0.04, 55, 288, 40, 0.15]
-# SIM_STEP = 0.025
-# tank_model = NOS_tank(*NOS_tank_params)
-# comb_chamber_model = CombustionChamberModel(D_0=0.05, L=0.6, _fuel_density=1100)
-
-# ox_massflow = tank_model.massflow
-# comb_chamber_model.sim_comubstion(oxidizer_massflow=ox_massflow, delta_time=SIM_STEP)
-# fuel_massflow = comb_chamber_model.get_fuel_massflow()
-# # OF_ratio = ox_massflow/fuel_massflow
-
-# bar_to_Pa = 100000
-
-# pressure_Pa = bar_to_Pa*(tank_model.pressure/2)
 sg = SimulationGenerator('.')
 
 stuff = {
-  'OF_ratio': [1.000, 5.000, 0.002],
+  'OF_ratio': [1.000, 5.000, .2],
   'temperature_K': [290, 310, 0.5], 
-  # 'pressure_Pa': [10000, 20000, 0.2]
+  'pressure_Pa': [10000, 20000, 50]
 }
-sg.generate_lookup(stuff)
+
+sg.generate_lookup(stuff, N2O_HTPB_ThermochemistryModel.sim_gas_mixture_combustion_temp)
+# sg.remove_lookup(stuff)
