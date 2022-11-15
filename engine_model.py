@@ -5,6 +5,13 @@ import matplotlib.pyplot as plt
 
 import cantera as ct
 
+PRINT_DEBUG_THERMOCHEM = True
+PRINT_DEBUG_COMB_CHAMBER = True
+PRINT_DEBUG_ENGINE = True
+
+PRINT_DEBUG_SIM = True
+PRINT_DEBUG_SIM_VERBOSE = True
+
 class N2O_HTPB_ThermochemistryModel:
 
     def __init__(self) -> None:
@@ -74,8 +81,9 @@ class CombustionChamberModel:
         self.fuel_mass_flux = 0 # Initial guess
         oxidizer_mass_flux = oxidizer_massflow / self.A
 
-        print('Oxidizer massflux = ' + str(oxidizer_mass_flux))
-        print('Port area = ' + str(self.A))
+        if PRINT_DEBUG_COMB_CHAMBER:
+            print('Oxidizer massflux = ' + str(oxidizer_mass_flux))
+            print('Port area = ' + str(self.A))
 
         iter_count = 0
 
@@ -93,7 +101,7 @@ class CombustionChamberModel:
 
             conv_criteria = (abs(self.fuel_mass_flux - recalc_fuel_mass_flux))/(self.fuel_mass_flux + 1e-9)
 
-            if print_flag:
+            if print_flag and PRINT_DEBUG_COMB_CHAMBER:
                 print('Recalculated flux: ' + str(recalc_fuel_mass_flux))
                 print('Convergence criteria: ' + str(conv_criteria))
 
@@ -109,7 +117,8 @@ class CombustionChamberModel:
 
 
         self.D += 2*self.regression_rate*delta_time
-        print('Iteration regression rate: ' + str(self.regression_rate))
+        if PRINT_DEBUG_COMB_CHAMBER:
+            print('Iteration regression rate: ' + str(self.regression_rate))
         self.A = 0.25*math.pi*self.D**2
         self.cc_volume = self.A * self.L
         self.fuel_mass_flux = self.fuel_mass_flux
@@ -120,7 +129,7 @@ class CombustionChamberModel:
 
 class EngineModel:
 
-    def __init__(self, params, area_ratio) -> None:
+    def __init__(self, params, area_ratio, throat_diam) -> None:
         self.tank_model = NOS_tank(*params)
 
         # density in kg/m^3, lengths in meters
@@ -130,6 +139,8 @@ class EngineModel:
         self.area_ratio = area_ratio
         self.combusted_gas = 'not-simulated'
         self.thermo_model = N2O_HTPB_ThermochemistryModel()
+        self.cc_pressure = 101325 # Pa; initial pressure assumed to be atmospheric
+        self.A_throat = 0.25*math.pi*throat_diam**2
 
     @classmethod
     def reverse_mog_exit_pressure(cls, area_ratio, p1, k):
@@ -193,7 +204,10 @@ class EngineModel:
 
 
     def sim_burn(self, delta_time, update_thermochem = True):
+        vapak_start = perf_counter()
         tank_status = self.tank_model.execute_vapack(delta_time)
+        print('Vapak calculation time: ' + str(perf_counter() - vapak_start))
+
         if tank_status <= 0 or tank_status == 2:
             return -1 # Fuel exhausted
 
@@ -207,6 +221,8 @@ class EngineModel:
         OF_ratio = ox_massflow/fuel_massflow
         print('OF Ratio: ' + str(OF_ratio))
 
+
+
         bar_to_Pa = 100000
 
         start_time = perf_counter()
@@ -215,8 +231,11 @@ class EngineModel:
                     self.thermo_model.sim_gas_mixture_combustion_temp(\
                     OF_ratio=OF_ratio, temperature_K = 298, 
                     pressure_Pa = bar_to_Pa*(self.tank_model.pressure/2))
-        print('Cantera calculation time: ' + str(perf_counter() - start_time))
+        if PRINT_DEBUG_SIM_VERBOSE:
+            print('Cantera calculation time: ' + str(perf_counter() - start_time))
+
         print('Cantera combusted pressure: ' + str(self.combusted_gas.P))
+
 
 
         ### Calculate frozen flow nozzle parameters
@@ -225,16 +244,19 @@ class EngineModel:
         print('Cantera calculated k: ' + str(k))
 
         # From eqn (3-22) RPE
-        T_throat = 2 * self.combusted_gas.T / (k + 1)
+        T_throat = 2 * self.P.T / (k + 1)
 
         # From eqn (3-20) RPE
-        P_throat = self.combusted_gas.P * (2/(k + 1))**(k/(k - 1))
+        # P_throat = self.combusted_gas.P * (2/(k + 1))**(k/(k - 1))
+        P_throat = self.cc_pressure * (2/(k + 1))**(k/(k - 1))
         print('Throat pressure: ' + str(P_throat))
 
-        # From a reverse-mogging of equation 3-25 o RPE
+        # From a reverse-mogging of equation 3-25 of RPE
         P_exit = self.reverse_mog_exit_pressure(self.area_ratio, self.combusted_gas.P, k)
+        
         print('Nozzle exit pressure: ' + str(P_exit))
-        print('Area ratio sanity check: ' + str(self.area_ratio_mog_equation((P_exit/self.combusted_gas.P), k)))
+        if PRINT_DEBUG_SIM_VERBOSE:
+            print('Area ratio sanity check: ' + str(self.area_ratio_mog_equation((P_exit/self.combusted_gas.P), k)))
 
 
         # now just from isentropic equations:
@@ -258,7 +280,7 @@ if __name__ == '__main__':
 
     # Copy and pasted from the blowdown model code
     NOS_tank_params = [0.04, 55, 288, 40, 0.15]
-    engine_model = EngineModel(NOS_tank_params, 4.8)
+    engine_model = EngineModel(NOS_tank_params, 4.8, 0.039385)
     # area_ratio = EngineModel.area_ratio_mog_equation(0.1, 1.2)
     # p_e = engine_model.reverse_mog_exit_pressure(area_ratio, 100000, 1.2)
     # print('remogged_ratio= ' + str(p_e/100000))
@@ -270,8 +292,16 @@ if __name__ == '__main__':
     timestamps = []
 
     sim_time = 0
-    SIM_STEP = 0.025
+    SIM_STEP = 0.05
     step_count = 0 
+
+    # plt.ion()
+    fig, ax = plt.subplots(figsize=(1,1))
+    plot, = ax.plot(timestamps, thrust_values)
+    plt.title('Thrust curve')
+    fig.show()
+    fig.canvas.draw()
+    
 
     while sim_ok:
 
@@ -279,9 +309,18 @@ if __name__ == '__main__':
         if not ((step_count % 1) == 0):
             sim_thermochem = False
 
+        sim_start = perf_counter()
         thrust_value = engine_model.sim_burn(SIM_STEP, update_thermochem=sim_thermochem)
+        print('Simulation step compute time: ' + str(perf_counter() - sim_start))
+
         sim_time += SIM_STEP
         step_count += 1
+
+        plot.set_xdata(timestamps)
+        plot.set_ydata(thrust_values)
+
+        fig.canvas.draw()
+        fig.canvas.flush_events()
 
         if thrust_value == -1:
             sim_ok = False # burnout
@@ -289,7 +328,4 @@ if __name__ == '__main__':
             thrust_values.append(thrust_value)
             timestamps.append(sim_time)
 
-    plt.plot(timestamps, thrust_values)
-    plt.title('Thrust curve')
-    plt.show()
 

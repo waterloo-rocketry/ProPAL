@@ -14,9 +14,12 @@ from NOSThermo import NOSThermo
 from z_factor import z_factor
 
 
+
 # Project imports
 
+# 
 
+from time import perf_counter
 
 DEBUG_VERBOSE = False
 
@@ -26,6 +29,8 @@ pCrit = 72.51
 ZCrit = 0.28
 # NOS ratio os specific heats
 ratio_of_specific_heats_gamma = 1.3
+
+PRINT_DEBUG_VERBOSE = True
 
 
 
@@ -248,6 +253,8 @@ class NOS_tank:
 
         aim = 0
 
+        z_start = perf_counter()
+
         while not exit_flag:
             iter_T = self.calc_temperature_during_vap_only(self.temperature, previous_vapor_mass,
                                                     previous_Z, guess_Z,
@@ -271,6 +278,7 @@ class NOS_tank:
                 self.previous_temperature = self.temperature
                 self.temperature = iter_T
                 # print("Number of Z iterations: " + str(z_iter_count) + " Calculated Z value: " + str(iter_Z))
+                print("Z calc time: " + str(perf_counter() - z_start))
                 return True
 
             # Adjust guess based on relative size
@@ -292,7 +300,7 @@ class NOS_tank:
                 print('Failed to converge while iterating Z')
                 exit_flag = True
                 return False
-
+        
 
 
 
