@@ -181,6 +181,10 @@ class NOS_tank:
 
     def calculate_injector_massflow(self, P_tank, P_comb_chamber, target_density, loss_coeff):
         pressure_drop = P_tank - P_comb_chamber
+        print('Pressure Drop: ' + str(pressure_drop))
+
+        if pressure_drop < 0:
+            raise RuntimeError("Pressure drop is negative. Your engine blew up")
 
         mass_flowrate = sqrt(2 * target_density * pressure_drop*100000 / self.calculate_loss_factor(loss_coeff))
         return mass_flowrate
@@ -304,14 +308,17 @@ class NOS_tank:
 
 
 
-    def execute_vapack(self, time_step, suppress_prints=False):
+    def execute_vapack(self, time_step, suppress_prints=False, given_cc_pressure = None):
         """
         Execute a single cycle of tank blowdown under self-pressurization. 
 
         This is referred by Rick Newlands as 'Vapak'
         """
 
-        curr_cc_pressure = self.calculate_CC_pressure(self.pressure)
+        if given_cc_pressure:
+            curr_cc_pressure = given_cc_pressure
+        else:
+            curr_cc_pressure = self.calculate_CC_pressure(self.pressure)
 
         # These numbers were adjusted ad-hoc while we were in the bar with help from Cristian B. and Aaron L. to roughly
         # match the massflow of our engine, this will need to be looked at later in more detail
