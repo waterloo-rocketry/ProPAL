@@ -151,38 +151,48 @@ class EngineModel:
         self.throat_diam = throat_diam
         self.A_throat = 0.25*math.pi*throat_diam**2
 
-        self.cc_gas_mass = 0
+        self.cc_gas_mass = 1e-6
+
+        self.previous_dP = 0
         self.dP = 0
+
+        self.previous_dm = 0
         self.dm = 0 
 
+
+        self.elapsed_time = 0
         self.pressure_build_time = 'not-evaluated'
         self.pressure_build_time_evaluated = False
 
+        self.choked = False
+
     @classmethod
-    def reverse_mog_exit_pressure(cls, area_ratio, p1, k):
+    def reverse_mog_exit_pressure(cls, area_ratio, p1, k, choked = True):
         conv_flag = False
 
         # p_exit_guess = p1 - 1e-5  # Pa
         # p_increment = -100
 
-        p_exit_guess = 0 + 1e-5
-        p_increment = 1000
+        if choked:
+            p_exit_guess = 0 + 1e-6
+            p_increment = 10000
+        else: # if flow is noty choked, it will try to find the higher (subsonic) solution
+            p_exit_guess = p1 - 1e-6
+            p_increment = -10000
 
         iter_count = 0
 
         while not conv_flag:
-            p_exit_guess += p_increment
+            
 
             
             # print('Pressure guess: ' + str(p_exit_guess))
             # print('Pressure ratio: ' + str(p_exit_guess/p1))
             resulting_area_ratio = cls.area_ratio_mog_equation(p_exit_guess/p1, k)
             # print('Computed area ratio: ' + str(resulting_area_ratio))
+            # print(area_ratio)
 
-            if p_increment > 0 and resulting_area_ratio < area_ratio:
-                p_increment = -math.sqrt(p_increment)
-            elif p_increment < 0 and resulting_area_ratio > area_ratio:
-                p_increment = math.sqrt(abs(p_increment))
+
 
             iter_count += 1
 
@@ -191,8 +201,15 @@ class EngineModel:
                 conv_flag = True
                 # print(p_increment)
 
-            if iter_count >= 10000:
+            if iter_count >= 100000:
                 raise RuntimeError('Mogged exit pressure failed to converge')
+
+            p_exit_guess += p_increment
+
+            if p_increment > 0 and resulting_area_ratio < area_ratio:
+                p_increment = -math.sqrt(p_increment)
+            elif p_increment < 0 and resulting_area_ratio > area_ratio:
+                p_increment = math.sqrt(abs(p_increment))
 
 
 
@@ -220,8 +237,10 @@ class EngineModel:
 
 
     def sim_burn(self, delta_time, update_thermochem = True):
+        self.elapsed_time += delta_time
+
         vapak_start = perf_counter()
-        tank_status = self.tank_model.execute_vapack(delta_time, False, given_cc_pressure=self.cc_pressure/BAR_TO_PA)
+        tank_status = self.tank_model.execute_vapack(delta_time, suppress_prints= False, given_cc_pressure=self.cc_pressure/BAR_TO_PA)
         print('Vapak calculation time: ' + str(perf_counter() - vapak_start))
 
         if tank_status <= 0 or tank_status == 2:
@@ -257,28 +276,55 @@ class EngineModel:
         ### Calculate frozen flow nozzle parameters
 
         self.k = self.combusted_gas.cp / self.combusted_gas.cv
+        k = self.k
         print('Cantera calculated k: ' + str(self.k))
 
-        # From eqn (3-22) RPE
-        self.T_throat = 2 * self.combusted_gas.T / (self.k + 1)
+
 
         # See RPE chapter 3, pg 48 
         R = self.current_specific_R = 8314 / self.combusted_gas.mean_molecular_weight
 
-        # RPE Equation (3-23); this is the mach 1 at the given temperature
-        self.throat_velocity = math.sqrt(self.k*R*self.T_throat)
+        # It needs to be determined if the flow is even sonic:
+        critical_upstream_pressure = 101325 * (2/(k + 1))**(-k/(k - 1)) # From wikipedia, choked flow condition. 
+        if self.cc_pressure < critical_upstream_pressure:
+            # https://www.engineersedge.com/pressure,045vessel/gas_discharge_rate_14170.htm
+            # This blessed link gives us the salvation we need
+            DISCHARGE_COEFF = 0.72
+            P_a = 101000
+            P_ratio = P_a/self.cc_pressure
+            self.throat_massflow = DISCHARGE_COEFF * self.A_throat * \
+                    math.sqrt( 2*self.cc_pressure*self.combusted_gas.density*(k/(k - 1)))* \
+                    (P_ratio**(2/k) - P_ratio**((k+1)/k))
+            self.choked = False
+        else:
+            # From flow mass continuity equation    
+            # RPE Equation (3-23); this is the mach 1 at the given temperature
+            self.throat_velocity = math.sqrt(self.k*R*self.T_throat)
+            self.throat_massflow = self.throat_velocity*self.A_throat*self.combusted_gas.density
+            self.choked = True
+            
 
-        # From flow mass continuity equation    
-        self.throat_massflow = self.throat_velocity*self.A_throat*self.combusted_gas.density
+        # From eqn (3-22) RPE
+        self.T_throat = 2 * self.combusted_gas.T / (self.k + 1)
 
-        # trying out the adams bashford bullshit
 
+
+
+        # This is assuming an always choked flow: not necessarily true
+
+
+        # trying out the adams bashforth multistep integration
         self.massflow_in = ox_massflow + fuel_massflow
+
         new_dm = ox_massflow + fuel_massflow - self.throat_massflow
-        old_cc_mass = self.cc_gas_mass
+        # differentially_mogged_dm = self.cc_gas_mass*((1/self.cc_pressure)*self.dP + 
+        #         (1/self.comb_chamber_model.cc_volume)*self.comb_chamber_model.volumetric_regression_rate)
+        # new_dm = differentially_mogged_dm
+        # back-calculated
+        # self.throat_massflow = self.massflow_in - new_dm
+
         self.cc_gas_mass += delta_time * (new_dm * (3/2) - self.dm * (1/2))
         self.dm = new_dm
-
 
         print('CC Volume: ' + str(self.comb_chamber_model.cc_volume))
 
@@ -287,12 +333,14 @@ class EngineModel:
 
         print('dP: ' + str(new_dP))
 
-        # trying out the adams bashford bullshit
-        self.cc_pressure += delta_time * ((3/2)* new_dP - (1/2) * self.dP)
+        # # trying out the adams bashforth multistep integration (3rd order)
+        self.cc_pressure += delta_time * ((23/12) * new_dP - (16/12) * self.dP + (5/12)*self.previous_dP)
+        self.previous_dP = self.dP
         self.dP = new_dP
 
         if self.dP < 0 and not self.pressure_build_time_evaluated:
-            pass # the function has no internal concept of time
+            self.pressure_build_time = self.elapsed_time
+            self.pressure_build_time_evaluated = True
 
         print('CC Pressure: ' + str(self.cc_pressure))
 
@@ -302,7 +350,7 @@ class EngineModel:
         print('Throat pressure: ' + str(P_throat))
 
         # From a reverse-mogging of equation 3-25 of RPE
-        P_exit = self.reverse_mog_exit_pressure(self.area_ratio, self.cc_pressure, self.k)
+        P_exit = self.reverse_mog_exit_pressure(self.area_ratio, self.cc_pressure, self.k, choked=self.choked)
         
         print('Nozzle exit pressure: ' + str(P_exit))
         if PRINT_DEBUG_SIM_VERBOSE:
@@ -349,22 +397,24 @@ if __name__ == '__main__':
     massflow_in_values = []
 
     sim_time = 0
-    SIM_STEP = 0.0125
+    SIM_STEP = 0.0005
     step_count = 0 
 
     # Setting this too low will throttle performance
-    GRAPH_UPDATE_INTERVAL = 1.5
+    GRAPH_UPDATE_INTERVAL = 1
 
     fig1 = plt.figure(animated=True)
 
-    ax1 = fig1.add_subplot(2,4,1)
-    ax2 = fig1.add_subplot(2,4,2)
-    ax3 = fig1.add_subplot(2,4,3)
-    ax4 = fig1.add_subplot(2,4,4)
-    ax5 = fig1.add_subplot(2,4,5)
-    ax6 = fig1.add_subplot(2,4,6)
-    ax7 = fig1.add_subplot(2,4,7)
-    ax8 = fig1.add_subplot(2,4,8)
+    ax1 = fig1.add_subplot(2,5,1)
+    ax2 = fig1.add_subplot(2,5,2)
+    ax3 = fig1.add_subplot(2,5,3)
+    ax4 = fig1.add_subplot(2,5,4)
+    ax5 = fig1.add_subplot(2,5,5)
+    ax6 = fig1.add_subplot(2,5,6)
+    ax7 = fig1.add_subplot(2,5,7)
+    ax8 = fig1.add_subplot(2,5,8)
+
+    ax9 = fig1.add_subplot(2,5,9) # for print-outs
     
     plt.ion()
 
@@ -389,16 +439,14 @@ if __name__ == '__main__':
     ax7.set_title('K value')
     ax8.set_title('Massflow In')
 
+    # ax9.set_title('Values:')
+
 
     plt.show(block=False)
-
-    axbackground = fig1.canvas.copy_from_bbox(ax1.bbox)
-    ax2background = fig1.canvas.copy_from_bbox(ax2.bbox)
-
-    ax1.autoscale_view()
-    ax2.autoscale_view()
     
     prev_plot = perf_counter()
+
+    text_display_flag = False
 
     while sim_ok:
 
@@ -416,15 +464,6 @@ if __name__ == '__main__':
 
         
         if perf_counter() - prev_plot > GRAPH_UPDATE_INTERVAL: 
-            # ax1.clear()
-            # ax2.clear()
-
-            # ax1.set_title('Thrust')
-            # ax2.set_title('CC Pressure')
-
-            # ax1.plot(timestamps, thrust_values, color='red')
-            # ax2.plot(timestamps, cc_pressure_values, color='red')
-
             plot1.set_data(timestamps, thrust_values)
             plot2.set_data(timestamps, cc_pressure_values)
             plot3.set_data(timestamps, massflow_out_values)
@@ -454,6 +493,17 @@ if __name__ == '__main__':
 
             # ax1.draw_artist(plot)
             # ax2.draw_artist(plot2)
+
+            ax9.clear()
+            ax9.text(0.9,0.8, f'CC Pres: {engine_model.cc_pressure:.3f}', 
+                        ha = 'right', transform=ax9.transAxes)
+            ax9.text(0.9,0.7, f'Choked?: {engine_model.choked}', 
+                        ha = 'right', transform=ax9.transAxes)
+
+            if engine_model.pressure_build_time_evaluated:
+                ax9.text(0.9,0.9, f'Pres rise time: {engine_model.pressure_build_time:.3f}', 
+                        ha = 'right', transform=ax9.transAxes)
+                text_display_flag = True
 
             
             fig1.canvas.draw()
@@ -508,6 +558,18 @@ if __name__ == '__main__':
                     file.write(str(k_values[idx]) + ', ')
                     file.write(str(massflow_in_values[idx]) + ', ')
                     file.write('\n')
+
+            ax9.clear()
+            ax9.text(0.9,0.8, f'CC Pres: {engine_model.cc_pressure:.3f}', 
+                        ha = 'right', transform=ax9.transAxes)
+            ax9.text(0.9,0.7, f'Choked?: {engine_model.choked}', 
+                        ha = 'right', transform=ax9.transAxes)
+
+            if engine_model.pressure_build_time_evaluated:
+                ax9.text(0.9,0.9, f'Pres rise time: {engine_model.pressure_build_time:.3f}', 
+                        ha = 'right', transform=ax9.transAxes)
+                text_display_flag = True
+
             
             plt.show(block=True)
 

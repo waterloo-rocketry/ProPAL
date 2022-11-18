@@ -317,6 +317,7 @@ class NOS_tank:
 
         if given_cc_pressure:
             curr_cc_pressure = given_cc_pressure
+            print('Reeee')
         else:
             curr_cc_pressure = self.calculate_CC_pressure(self.pressure)
 
@@ -382,7 +383,7 @@ class NOS_tank:
                 print('Prevaporized liquid mass: ' + str(self.mass_liquid), end = ' ')
                 print('True liquid mass: '+ str(true_liquid_mass))
 
-            # The difference in masses is the liquid that would be vporized to maintain vapor pressure
+            # The difference in masses is the liquid that would be vaporized to maintain vapor pressure
             mass_vaporized = self.mass_liquid - true_liquid_mass
 
 
@@ -412,6 +413,7 @@ class NOS_tank:
             return -1
         elif curr_cc_pressure < 1: 
             return 0 # CC pressure below atmospheric, gas expansion ceases
+        
 
         return 1 # Ready to continue iterating
 
