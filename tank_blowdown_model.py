@@ -165,7 +165,15 @@ class NOS_tank:
         # ^ That was actually corrected, but all of this is still incredibly sketch, needs more
         # investigation
 
-        loss_factor = loss_coeff/((0.25*pi*(ORIFICE_DIAM**(2))*NUM_ORIFICES)**2)
+        A_inj_override = None # 0.0001076 # m^2
+
+
+        if not A_inj_override:
+            total_A_inj = (0.25*pi*(ORIFICE_DIAM**(2))*NUM_ORIFICES)
+        else:
+            total_A_inj = A_inj_override
+
+        loss_factor = loss_coeff/(total_A_inj**2)
         return loss_factor
 
     def calc_densities(self):
@@ -179,14 +187,29 @@ class NOS_tank:
         self.mass_liquid = liquid_volume * self.density_liquid
         self.mass_vapor = vapor_volume * self.density_vapor
 
-    def calculate_injector_massflow(self, P_tank, P_comb_chamber, target_density, loss_coeff):
+    def calculate_injector_massflow(self, P_tank, P_comb_chamber, target_density, 
+            loss_coeff, discharge_coeff = None):
         pressure_drop = P_tank - P_comb_chamber
-        print('Pressure Drop: ' + str(pressure_drop))
+        # print('Pressure Drop: ' + str(pressure_drop))
 
         if pressure_drop < 0:
             raise RuntimeError("Pressure drop is negative. Your engine blew up")
 
-        mass_flowrate = sqrt(2 * target_density * pressure_drop*100000 / self.calculate_loss_factor(loss_coeff))
+        if discharge_coeff or True:
+            # TODO: Need to actually implement this correctly
+            A_inj_override = 0.0001076 # m^2
+
+            discharge_coeff = 0.7
+
+            # this is just a hack way of determining if we're in the vapor phase
+            if loss_coeff == 10:
+                discharge_coeff = 0.7
+
+            mass_flowrate = discharge_coeff * A_inj_override * sqrt(2 * target_density * pressure_drop*101325)
+        else:
+            mass_flowrate = sqrt(2 * target_density * pressure_drop*100000 / self.calculate_loss_factor(loss_coeff))
+
+
         return mass_flowrate
     
 
@@ -282,7 +305,7 @@ class NOS_tank:
                 self.previous_temperature = self.temperature
                 self.temperature = iter_T
                 # print("Number of Z iterations: " + str(z_iter_count) + " Calculated Z value: " + str(iter_Z))
-                print("Z calc time: " + str(perf_counter() - z_start))
+                # print("Z calc time: " + str(perf_counter() - z_start))
                 return True
 
             # Adjust guess based on relative size
@@ -324,28 +347,37 @@ class NOS_tank:
         # These numbers were adjusted ad-hoc while we were in the bar with help from Cristian B. and Aaron L. to roughly
         # match the massflow of our engine, this will need to be looked at later in more detail
         if self.mass_liquid > 0:
-            interval_massflow = self.calculate_injector_massflow(self.pressure, curr_cc_pressure, self.density_liquid, 80)
+            new_interval_massflow = self.calculate_injector_massflow(self.pressure, curr_cc_pressure, self.density_liquid, 80)
         else:
-            interval_massflow = self.calculate_injector_massflow(self.pressure, curr_cc_pressure, self.density_vapor, 10)
+            new_interval_massflow = self.calculate_injector_massflow(self.pressure, curr_cc_pressure, self.density_vapor, 10)
 
         # As per the paper, using Adams-Bashforth 2nd Order Equation
         # Source: https://en.wikipedia.org/wiki/Linear_multistep_method
 
-        previous_massflow = self.massflow
+        
         previous_delta_mass = self.interval_delta_mass
+
+
 
         # Aspirespace paper doesn't use the first term of the Adams-Bashford, and I can't get it to work like that anyway
         # This is now essentially copypasta from the example code (link restated for convenience) 
         # http://www.aspirespace.org.uk/downloads/Modelling%20the%20nitrous%20run%20tank%20emptying.pdf
         # (Page 14)
 
-        delta_system_mass = time_step * ((3/2)*interval_massflow - (1/2)*previous_massflow)
+        
+        delta_system_mass = time_step * ((23/12)*new_interval_massflow - (16/12) * self.massflow + (5/12)*self.previous_massflow)
+
+        
 
         # Alternative (non-integrated) form also seems like it might work, leaving it here:
         #delta_system_mass = time_step * interval_massflow
 
-        self.massflow = interval_massflow
+        self.previous_massflow = self.massflow
+        self.massflow = new_interval_massflow
         self.interval_delta_mass = delta_system_mass
+
+        if not suppress_prints:
+            print('Delta System Mass: ' + str(delta_system_mass))
 
         if self.mass_liquid <= 0: # Final stage of burn; vapor-only expansion
             
@@ -367,41 +399,44 @@ class NOS_tank:
             # Prior to accounting for nitrous vaporization to account 
             self.prev_mass_liquid = self.mass_liquid
             self.mass_liquid -= delta_system_mass 
-            curr_system_mass = self.mass_liquid + self.mass_vapor
-
-            if not suppress_prints:
-                print('Current system mass: ' + str(curr_system_mass), end = ' ')
-                print('Calculated Vapor Density: ' + str(self.density_vapor), end = ' ')
-                print('Calculated Liquid Density ' + str(self.density_liquid))
-
-            # Actual mass of the liquid in the tank determined based on liquid-gas equilibrium in the tank
-            # given reduced overall system mass    
-            true_liquid_mass = (self.volume  - (curr_system_mass / self.density_vapor))/ \
-                    (self.density_liquid**(-1) - self.density_vapor**(-1))
-            
-            if not suppress_prints:
-                print('Prevaporized liquid mass: ' + str(self.mass_liquid), end = ' ')
-                print('True liquid mass: '+ str(true_liquid_mass))
-
-            # The difference in masses is the liquid that would be vaporized to maintain vapor pressure
-            mass_vaporized = self.mass_liquid - true_liquid_mass
-
-
-            self.mass_vapor +=  mass_vaporized
-            self.mass_liquid = true_liquid_mass
-
-            # Record first-order lagging vapor mass value to account for vaporization time of the nitrous
-            # In the same way as is done in the aspirespace paper
-            # Also without this the numerical model eats shit and begins to oscillate and die
-
-            self.lagging_vaporized_mass += (time_step/0.15) * (mass_vaporized - self.lagging_vaporized_mass)
-            if self.lagging_vaporized_mass > 0:
-                self.execute_repressurization_cooling(self.lagging_vaporized_mass)
-
 
             if self.mass_liquid <= 0:
                 print("Liquid Exhausted")
+                self.mass_vapor -= abs(self.mass_liquid)
                 self.mass_liquid = 0
+            else:
+                curr_system_mass = self.mass_liquid + self.mass_vapor
+
+                if not suppress_prints:
+                    print('Current system mass: ' + str(curr_system_mass), end = ' ')
+                    print('Calculated Vapor Density: ' + str(self.density_vapor), end = ' ')
+                    print('Calculated Liquid Density ' + str(self.density_liquid))
+
+                # Actual mass of the liquid in the tank determined based on liquid-gas equilibrium in the tank
+                # given reduced overall system mass    
+                true_liquid_mass = (self.volume  - (curr_system_mass / self.density_vapor))/ \
+                        (self.density_liquid**(-1) - self.density_vapor**(-1))
+                
+                if not suppress_prints:
+                    print('Prevaporized liquid mass: ' + str(self.mass_liquid), end = ' ')
+                    print('True liquid mass: '+ str(true_liquid_mass))
+
+                # The difference in masses is the liquid that would be vaporized to maintain vapor pressure
+                mass_vaporized = self.mass_liquid - true_liquid_mass
+
+
+                self.mass_vapor +=  mass_vaporized
+                self.mass_liquid = true_liquid_mass
+
+                # Record first-order lagging vapor mass value to account for vaporization time of the nitrous
+                # In the same way as is done in the aspirespace paper
+                # Also without this the numerical model eats shit and begins to oscillate and die
+
+                self.lagging_vaporized_mass += (time_step/0.15) * (mass_vaporized - self.lagging_vaporized_mass)
+
+                if self.lagging_vaporized_mass > 0:
+                    self.execute_repressurization_cooling(self.lagging_vaporized_mass)
+    
 
         if not suppress_prints:
             print("Iter CC Pressure: " + str(curr_cc_pressure), end = ' bar ')
@@ -442,6 +477,7 @@ class NOS_tank:
         self.calc_masses()
 
         self.interval_delta_mass = 0
+        self.previous_massflow = 0
         self.massflow = 0
         self.lagging_vaporized_mass = 0
 
@@ -455,7 +491,11 @@ if __name__ == "__main__":
     iter_count = 0
 
     # Initialize NOS model
-    NOS_model = NOS_tank(0.04, 55, 288, 40, 0.15)
+    # NOS_model = NOS_tank(0.04, 55, 288, 40, 0.15)
+
+    # New model values, numbers from Aaron 2022-11-19 
+    NOS_model = NOS_tank(0.0235, -99, 302.4, -99, 0.1)
+
 
     sim_time = 0
     timestamps = []
@@ -467,12 +507,12 @@ if __name__ == "__main__":
     vapor_mass_probe = []
     lagging_vaporized_probe = []
 
-    TIME_STEP = 0.1
-    ITER_LIMIT = 1000000
+    TIME_STEP = 0.01
+    ITER_LIMIT = 100000000
 
     while (iter_count < ITER_LIMIT and not exit_flag):
         suppress_prints = True
-        if iter_count % 1000 == 0:
+        if iter_count % 2 == 0:
             suppress_prints = False
             print('Simulation time: ' + str(sim_time), end=' | ')
 
@@ -529,6 +569,7 @@ if __name__ == "__main__":
 
             
     if iter_count >= (ITER_LIMIT - 1):
+
         print("Main loop iteration count exceeded")
 
 
