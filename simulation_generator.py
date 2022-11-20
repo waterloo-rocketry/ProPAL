@@ -41,12 +41,12 @@ class SimulationGenerator:
     writer = csv.writer(f)
     writer.writerow([*[key for key in params], 'P', 'CV', 'CP', 'T'])
 
+    # write all possible values for each key
     iters = []
     for _,val in params.items():
       temp = []
       # get precision 
       precision = self.get_precision(val[2])
-      # for x in np.linspace(val[0], val[1], int((val[1]-val[0])/val[2] + 1)): 
       for x in np.arange(val[0], val[1]+val[2], val[2]):
         temp.append(round(x, precision))
       iters.append(temp)
@@ -79,16 +79,52 @@ class SimulationGenerator:
 
 
 class LookUpTable:
-  def __init__(self, filename) -> None: 
+  def __init__(self, filename, step_sizes) -> None: 
     f = open(filename, 'r')
     self.reader = csv.reader(f)
+    self.step_sizes = step_sizes
+    self.columns = next(self.reader)
+    self.num_columns = len(self.columns)
+
+    self.num_input_params = filename.split('-').index('') - 1
+    print(self.num_input_params)
+
+    self.table = dict()
     for row in self.reader:
-      print(row)
+      self.table[tuple([float(row[i]) for i in range(self.num_input_params)])] = np.array([float(row[i]) for i in range(self.num_input_params, len(row))])
+
+    # self.table = np.array(temp_table)
+    print(self.table[(1.0,290.0,10000)])
     f.close()
-    pass
 
   def lookup(self, params_to_search):
     # perform trilinear interpolation
+    if self.table[params_to_search]:
+      return self.table[params_to_search]
+    # else 
+    nearest_points = [ [] for _ in params_to_search ]
+    # how do we find nearest points without searching the entire dictionary??
+    # aaaaaaaaaaa
+    # Solution: could be something calculated from step size and starting point
+
+    iters = [] # declared the same as in the above fn
+    # for _,val in params.items():
+    #   temp = []
+    #   # get precision 
+    #   precision = self.get_precision(val[2])
+    #   for x in np.arange(val[0], val[1]+val[2], val[2]):
+    #     temp.append(round(x, precision))
+    #   iters.append(temp)
+
+    index = 0
+    for key, val in params_to_search:
+      for j in len(iters[index]):
+        if iters[index][j] < params_to_search[val] and iters[index][j] + step_size > params_to_search[val]:
+          nearest_points[index].append(iters[index][j])
+        elif iters[index][j] > params_to_search[val] and iters[index][j] - step_size < params_to_search[val]:
+          nearest_points[index].append(iters[index][j])
+      index += 1
+      
     pass
 
 class Sim:
@@ -109,7 +145,7 @@ stuff = {
   'pressure_Pa': [10000, 20000, 250]
 }
 
-sg.generate_lookup(stuff, N2O_HTPB_ThermochemistryModel.sim_gas_mixture_combustion_temp)
+# sg.generate_lookup(stuff, N2O_HTPB_ThermochemistryModel.sim_gas_mixture_combustion_temp)
 # sg.remove_lookup(stuff)
 
-# lut = LookUpTable("./SG-OF_ratio-temperature_K-pressure_Pa---1.0-5.0-0.3-290-310-0.5-10000-20000-100.csv")
+lut = LookUpTable("./SG-OF_ratio-temperature_K-pressure_Pa---1.0-5.0-0.3-290-310-0.5-10000-20000-100.csv", [0.3, 0.5, 100])
