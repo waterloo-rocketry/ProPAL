@@ -191,6 +191,8 @@ class EngineModel:
 
         self.choked = False
 
+        self.iter_count = 0
+
 
     @classmethod
     def solve_exit_pressure(cls, area_rat00io, p1, k, choked = True):
@@ -239,12 +241,12 @@ class EngineModel:
 
             iter_count += 1
 
-            if (abs(resulting_area_ratio - area_ratio))/area_ratio < 0.0005:
+            if (abs(resulting_area_ratio - area_ratio))/area_ratio < 0.00025:
                 # print('Exit pressure converged in ' + str(iter_count) + ' cycles')
                 conv_flag = True
                 # print(p_increment)
 
-            if iter_count >= 1000000:
+            if iter_count >= 100000:
                 raise RuntimeError('Mogged exit pressure failed to converge')
 
             
@@ -291,7 +293,7 @@ class EngineModel:
 
 
     def sim_burn(self, delta_time, update_thermochem = True, external_tc_model = None):
-        self.elapsed_time += delta_time
+
 
         vapak_start = perf_counter()
         tank_status = self.tank_model.execute_vapack(delta_time, suppress_prints= False, given_cc_pressure=self.cc_pressure/BAR_TO_PA)
@@ -386,12 +388,21 @@ class EngineModel:
 
         # # trying out the adams bashforth multistep integration (3rd order)
 
-        
         delta_m_second_order = delta_time * ((3/2) * new_dm - (1/2) * self.dm)
         delta_m_third_order = delta_time * ((23/12) * new_dm - (16/12) * self.dm + (5/12)*self.previous_dm)
 
+        final_step_delta_m = 3*delta_m_third_order - 2*delta_m_second_order
+
+        # Use higher-order estimates as they become available due to previous calculations
+        if self.iter_count == 0:
+            final_step_delta_m = delta_time * new_dm
+        elif self.iter_count == 1:
+            final_step_delta_m = delta_m_second_order
+        else:
+            final_step_delta_m = delta_m_third_order
+
         # Trying some richardson extrapolation bullshit, idk if this will even work
-        self.cc_gas_mass += 3*delta_m_third_order - 2*delta_m_second_order
+        self.cc_gas_mass += delta_time * new_dm
 
         self.numerical_error = abs(delta_m_third_order - delta_m_second_order)
 
@@ -411,7 +422,17 @@ class EngineModel:
         delta_p_second_order = delta_time * ((3/2) * new_dP - (1/2) * self.dP)
         delta_p_third_order = delta_time * ((23/12) * new_dP - (16/12) * self.dP + (5/12)*self.previous_dP)
 
-        self.cc_pressure += 3*delta_p_third_order - 2*delta_p_second_order
+        final_step_delta_P = 3*delta_p_third_order - 2*delta_p_second_order
+
+        # Use higher-order estimates as they become available due to previous calculations
+        if self.iter_count == 0:
+            final_step_delta_P = delta_time * new_dP
+        elif self.iter_count == 1:
+            final_step_delta_P = delta_p_second_order
+        else:
+            final_step_delta_P = delta_p_third_order
+
+        self.cc_pressure += delta_time * new_dP
         self.previous_dP = self.dP
         self.dP = new_dP
 
@@ -434,15 +455,20 @@ class EngineModel:
                         (1 - (P_exit/self.cc_pressure)**((self.k-1/self.k))))**(0.5)
         print('Nozzle exit velocity: ' + str(self.velocity_exit))
 
-        thrust = (self.throat_massflow)*self.velocity_exit * self.combustion_efficiency
+        self.thrust = (self.throat_massflow)*self.velocity_exit * self.combustion_efficiency
 
         if self.dP < 0 and not self.pressure_build_time_evaluated:
             self.pressure_build_time = self.elapsed_time
             self.pressure_build_time_evaluated = True
-            self.thurst_at_pressure_peak = thrust
+            self.thurst_at_pressure_peak = self.thrust
 
         print('') # newline
-        return thrust
+
+        # For tracking how numerical methods are implemented
+        self.elapsed_time += delta_time
+        self.iter_count += 1
+
+        return self.thrust
 
 class HybridBurnSimulator:
 
@@ -487,11 +513,12 @@ class HybridBurnSimulator:
         massflow_in_values = []
 
         numerical_error_values = []
-        time_step_values = []
+        step_error_values = []
+        step_time_values = []
 
         sim_time = 0
         INITIAL_SIM_STEP = 0.0001
-        NUMERICAL_EPSILON = 1e-9
+        NUMERICAL_EPSILON = 1e-6
         step_count = 0 
 
         DEBUG_STEP_LIMIT = -99 # For halting the program a set amount of iterations in (negative values will run the simulation normally)
@@ -517,6 +544,10 @@ class HybridBurnSimulator:
         ax10 = fig1.add_subplot(3,5,10) # for print-outs
 
         ax11 = fig1.add_subplot(3,5,11)
+        ax12 = fig1.add_subplot(3,5,12)
+
+        ax13 = fig1.add_subplot(3,5,13)
+        ax14 = fig1.add_subplot(3,5,14)
 
 
         
@@ -536,7 +567,8 @@ class HybridBurnSimulator:
         plot8, = ax8.plot(timestamps, massflow_in_values)
         plot9, = ax9.plot(timestamps, numerical_error_values)
 
-        plot11, = ax9.plot(timestamps, numerical_error_values)
+        plot11, = ax11.plot(timestamps, step_error_values)
+        plot12, = ax12.plot(timestamps, step_time_values)
         
 
         fig1.canvas.draw()
@@ -552,7 +584,10 @@ class HybridBurnSimulator:
 
         ax9.set_title('Numerical Error')
 
-        axs = [ax1,ax2,ax3,ax4,ax5,ax6,ax7,ax8,ax10,ax9]
+        ax11.set_title('Step Error')
+        ax12.set_title('Time Step')
+
+        axs = [ax1,ax2,ax3,ax4,ax5,ax6,ax7,ax8,ax10,ax9, ax11,ax12]
 
         for ax in axs:
             plt.sca(ax)
@@ -578,7 +613,14 @@ class HybridBurnSimulator:
         prev_plot = perf_counter()
 
         ADAPTIVE_STEP = True
+
+        # Absolute and relative errors for the variable being measured (currently pressure in Pa)
+        # The error scale is thus atol + P*rtol
+        STEP_RTOL = 1e-6
+        STEP_ATOL = 1
+
         step_size = INITIAL_SIM_STEP
+
 
         while sim_ok:
 
@@ -589,35 +631,94 @@ class HybridBurnSimulator:
             
 
             step_start_time = perf_counter()
+            step_error = 1e12
 
             if ADAPTIVE_STEP:
-                step_error = 1e12
+                
                 iter_abort_flag = False
+                adaptive_step_iters = 0
+                previous_step_size = step_size
 
                 while step_error > NUMERICAL_EPSILON and not iter_abort_flag:
 
                     full_step_model = deepcopy(engine_model)
                     half_step_model = deepcopy(engine_model)
 
-                    full_step_model.sim_burn(step_size, update_thermochem=sim_thermochem, external_tc_model=thermo_model)
+                    full_step_model.sim_burn(step_size, update_thermochem=sim_thermochem,
+                             external_tc_model=thermo_model)
 
-                    half_step_model.sim_burn(step_size/2, update_thermochem=sim_thermochem, external_tc_model=thermo_model)
-                    half_step_model.sim_burn(step_size/2, update_thermochem=sim_thermochem, external_tc_model=thermo_model)
+                    half_step_model.sim_burn(step_size/2, update_thermochem=sim_thermochem, 
+                            external_tc_model=thermo_model)
+                    half_step_model.sim_burn(step_size/2, update_thermochem=sim_thermochem, 
+                            external_tc_model=thermo_model)
                     
                     full_step_pressure = full_step_model.cc_pressure
                     half_step_pressure = half_step_model.cc_pressure
 
-                    thrust_value = engine_model.sim_burn(INITIAL_SIM_STEP, update_thermochem=sim_thermochem, external_tc_model=thermo_model)
-                    cc_pressure_value = engine_model.cc_pressure
+                    # Most of this numerical step size code follow the approach suggested by 
+                    # Press et al (2007) in Numerical Recipes 3e, pg 913-915
 
-                    iter_abort_flag = True
+                    truncation_error = full_step_pressure - half_step_pressure
+
+                    err_scale = STEP_ATOL + STEP_RTOL*full_step_pressure
+
+                    step_error = abs(truncation_error/err_scale)
+                    if step_error == 0:
+                        break
+
+                    TARGET_ERROR = 1 # err_scale/err_scale
+                    ITER_SAFETY_FACTOR = 0.98
+
+                    # Taken as a modification of Numerical Recipes eqn (17.2.10)
+                    # [The original approach was for Runge Kutta 5th order, the existing 
+                    # solution is 3rd order, hence the use of 1/3 instead of 1/5 in the exponent
+                    # for more details, read the textbook]
+                    
+                    # This was made up by me, due to the overall dubious nature of this
+                    # code; in order to prevent oscillation. This probably slows down the code
+                    # significantly
+                    COARSENING_SAFTY_FACTOR = 0.975
+
+                    if step_error < COARSENING_SAFTY_FACTOR * TARGET_ERROR: 
+                        # Step size can be coarsened, and then the function can exit:
+                        step_size = ITER_SAFETY_FACTOR * step_size *\
+                                (TARGET_ERROR/step_error)**(1/3)
+                        iter_abort_flag = True
+                        print(adaptive_step_iters)
+                    elif step_error > TARGET_ERROR:
+                        # Error too great, the step size must be coarsened
+                        step_size = ITER_SAFETY_FACTOR * step_size *\
+                                (TARGET_ERROR/step_error)**(1/3)
+                    else:
+                        # No modification of step size required. 
+                        iter_abort_flag = True
+                        print(adaptive_step_iters)
+
+
+
+                    if adaptive_step_iters >= 10:
+                        print('WARNING: Iteration count (10) for adaptive step exceeded!')
+                        iter_abort_flag = True
+                    
+                    if step_size >= previous_step_size * 10 or step_size <= previous_step_size * 5:
+                        iter_abort_flag = True
+
+                    adaptive_step_iters += 1
+                    # iter_abort_flag = True
+
+                engine_model = deepcopy(half_step_model)
+
+                thrust_value = engine_model.thrust
+                cc_pressure_value = engine_model.cc_pressure
+
             else:
+
                 thrust_value = engine_model.sim_burn(INITIAL_SIM_STEP, update_thermochem=sim_thermochem, external_tc_model=thermo_model)
                 cc_pressure_value = engine_model.cc_pressure
 
             print('Simulation step compute time: ' + str(perf_counter() - step_start_time))
 
-            sim_time += INITIAL_SIM_STEP
+            sim_time += step_size
             step_count += 1
 
             
@@ -630,18 +731,37 @@ class HybridBurnSimulator:
                 plot6.set_data(timestamps, v_ex_values)
                 plot7.set_data(timestamps, k_values)
                 plot8.set_data(timestamps, massflow_in_values)
-
                 plot9.set_data(timestamps, numerical_error_values)
+
+                plot11.set_data(timestamps, step_error_values)
+                plot12.set_data(timestamps, step_time_values)
+                
 
                 for ax in axs:
                     ax.relim()
                     ax.autoscale_view()
 
+                fig1.canvas.draw()
+                
+                with open(OUTPUT_FILE_PATH, 'w') as file:
+                    file.write('Time (s), Thrust (N), CC Pressure (Pa), '+\
+                        'mdot_out (kg/s), T_t (K), OF (dimless), k (dimless), mdot_in (kg/s)')
+
+                    for idx in range(len(timestamps)):
+                        file.write(str(timestamps[idx]) + ', ')
+                        file.write(str(thrust_values[idx]) + ', ')
+                        file.write(str(cc_pressure_values[idx]) + ', ')
+                        file.write(str(massflow_out_values[idx]) + ', ')
+                        file.write(str(throat_temperature_values[idx]) + ', ')
+                        file.write(str(OF_values[idx]) + ', ')
+                        file.write(str(k_values[idx]) + ', ')
+                        file.write(str(massflow_in_values[idx]) + ', ')
+                        file.write('\n')
 
                 ax10.clear()
-                ax10.text(0.9,0.7, f'CC Pres: {engine_model.cc_pressure:3.3e}', 
-                            ha = 'right', transform=ax10.transAxes,  fontsize = 'small')
-                ax10.text(0.9,0.6, f'Choked?: {engine_model.choked}',  
+                ax10.text(0.9,0.7, f'CC Pres: {engine_model.cc_pressure:.3f}', 
+                            ha = 'right', transform=ax10.transAxes, fontsize = 'small')
+                ax10.text(0.9,0.6, f'Choked?: {engine_model.choked}', 
                             ha = 'right', transform=ax10.transAxes, fontsize = 'small')
 
                 if engine_model.pressure_build_time_evaluated:
@@ -668,8 +788,11 @@ class HybridBurnSimulator:
                 plot6.set_data(timestamps, v_ex_values)
                 plot7.set_data(timestamps, k_values)
                 plot8.set_data(timestamps, massflow_in_values)
-
                 plot9.set_data(timestamps, numerical_error_values)
+
+                plot11.set_data(timestamps, step_error_values)
+                plot12.set_data(timestamps, step_time_values)
+                
 
                 for ax in axs:
                     ax.relim()
@@ -719,6 +842,10 @@ class HybridBurnSimulator:
                 k_values.append(engine_model.k)
                 massflow_in_values.append(engine_model.massflow_in)
                 numerical_error_values.append(engine_model.numerical_error)
+
+                step_error_values.append(step_error)
+                step_time_values.append(step_size)
+
             
 
 
