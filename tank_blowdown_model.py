@@ -340,7 +340,7 @@ class NOS_tank:
 
         if given_cc_pressure:
             curr_cc_pressure = given_cc_pressure
-            print('Reeee')
+            # print('Reeee')
         else:
             curr_cc_pressure = self.calculate_CC_pressure(self.pressure)
 

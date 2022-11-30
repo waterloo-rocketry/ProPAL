@@ -2,19 +2,21 @@ _imports = 0 # Outline checkpoint
 
 from copy import deepcopy
 from time import perf_counter
-from tank_blowdown_model import NOS_tank
+
 import math
 import matplotlib.pyplot as plt
-
-import cantera as ct
 import os 
 
-PRINT_DEBUG_THERMOCHEM = True
-PRINT_DEBUG_COMB_CHAMBER = True
-PRINT_DEBUG_ENGINE = True
+from tank_blowdown_model import NOS_tank
+from OptimizationTemp.simulation_generator import LookUpTable
+from ThermochemWrappers import N2O_HTPB_ThermochemistryModel
 
-PRINT_DEBUG_SIM = True
-PRINT_DEBUG_SIM_VERBOSE = True
+PRINT_DEBUG_THERMOCHEM = False
+PRINT_DEBUG_COMB_CHAMBER = False
+PRINT_DEBUG_ENGINE = False
+
+PRINT_DEBUG_SIM = False
+PRINT_DEBUG_SIM_VERBOSE = False
 
 
 BAR_TO_PA = 100000
@@ -23,23 +25,7 @@ R = 360
 
 OUTPUT_FILE_PATH = "output.csv"
 
-class N2O_HTPB_ThermochemistryModel:
 
-    def __init__(self) -> None:
-        self.gas_model = ct.Solution('Mevel2015-rocketry_modified.yaml')
-    
-    
-    def sim_gas_mixture_combustion_temp(self, OF_ratio, temperature_K, pressure_Pa) -> float:
-
-        # This requires a download of a NASA file and some alteration to
-        # get it to compile correctly
-
-
-        self.gas_model.TPY = temperature_K, pressure_Pa, f'N2O:{OF_ratio}, C4H6:1'
-
-        self.gas_model.equilibrate('HP')
-
-        return self.gas_model
 
 class CombustionChamberModel:
 
@@ -123,8 +109,10 @@ class CombustionChamberModel:
                 print('Convergence criteria: ' + str(conv_criteria))
 
             if conv_criteria  < 0.0001:
-                conv_flag = True                
-                print('Converged fuel flux: ' + str(recalc_fuel_mass_flux) + ' Converged fuel massflow: ' + str(recalc_fuel_mass_flux * self.A))
+                conv_flag = True     
+                if PRINT_DEBUG_COMB_CHAMBER:           
+                    print('Converged fuel flux: ' + str(recalc_fuel_mass_flux) +\
+                         ' Converged fuel massflow: ' + str(recalc_fuel_mass_flux * self.A))
             
             self.fuel_mass_flux = recalc_fuel_mass_flux
 
@@ -292,12 +280,13 @@ class EngineModel:
 
 
 
-    def sim_burn(self, delta_time, update_thermochem = True, external_tc_model = None):
+    def sim_burn(self, delta_time, update_thermochem = True, external_tc_model = None, suppress_prints = False):
 
 
         vapak_start = perf_counter()
-        tank_status = self.tank_model.execute_vapack(delta_time, suppress_prints= False, given_cc_pressure=self.cc_pressure/BAR_TO_PA)
-        print('Vapak calculation time: ' + str(perf_counter() - vapak_start))
+        tank_status = self.tank_model.execute_vapack(delta_time, suppress_prints= True, given_cc_pressure=self.cc_pressure/BAR_TO_PA)
+        if PRINT_DEBUG_SIM_VERBOSE:
+            print('Vapak calculation time: ' + str(perf_counter() - vapak_start))
 
         if tank_status <= 0 or tank_status == 2:
             return -1 # Fuel exhausted
@@ -310,7 +299,9 @@ class EngineModel:
         fuel_massflow = self.comb_chamber_model.get_fuel_massflow()
 
         self.OF_ratio = ox_massflow/fuel_massflow
-        print('OF Ratio: ' + str(self.OF_ratio))
+
+        if PRINT_DEBUG_ENGINE:
+            print('OF Ratio: ' + str(self.OF_ratio))
 
         start_time = perf_counter()
         
@@ -323,19 +314,22 @@ class EngineModel:
         if (update_thermochem):
             combusted_gas = \
                     sim_tc_model.sim_gas_mixture_combustion_temp(\
-                    OF_ratio=self.OF_ratio, temperature_K = 273.15, # Current_T not used yet
+                    OF_ratio=self.OF_ratio, temperature_K = 273.31, # Current_T not used yet
                     pressure_Pa = self.cc_pressure)
         if PRINT_DEBUG_SIM_VERBOSE:
             print('Cantera calculation time: ' + str(perf_counter() - start_time))
 
-        print('Cantera combusted pressure: ' + str(combusted_gas.P))
+        if PRINT_DEBUG_THERMOCHEM:
+            print('Cantera combusted pressure: ' + str(combusted_gas.P))
 
 
         ### Calculate frozen flow nozzle parameters
 
         self.k = combusted_gas.cp / combusted_gas.cv
         k = self.k
-        print('Cantera calculated k: ' + str(self.k))
+
+        if PRINT_DEBUG_ENGINE:
+            print('Cantera calculated k: ' + str(self.k))
 
 
 
@@ -409,12 +403,14 @@ class EngineModel:
         self.previous_dm = self.dm
         self.dm = new_dm
 
-        print('CC Volume: ' + str(self.comb_chamber_model.cc_volume))
+        if PRINT_DEBUG_COMB_CHAMBER:
+            print('CC Volume: ' + str(self.comb_chamber_model.cc_volume))
 
         new_dP = self.cc_pressure*((1/self.cc_gas_mass)*self.dm - 
                 (1/self.comb_chamber_model.cc_volume)*self.comb_chamber_model.volumetric_regression_rate)
 
-        print('dP: ' + str(new_dP))
+        if PRINT_DEBUG_ENGINE:
+            print('dP: ' + str(new_dP))
 
         # Trying out the adams bashforth multistep integration (3rd order)
 
@@ -436,24 +432,27 @@ class EngineModel:
         self.previous_dP = self.dP
         self.dP = new_dP
 
-        print('CC Pressure: ' + str(self.cc_pressure))
+        if PRINT_DEBUG_ENGINE:
+            print('CC Pressure: ' + str(self.cc_pressure))
 
         # From eqn (3-20) RPE
         # P_throat = self.combusted_gas.P * (2/(k + 1))**(k/(k - 1))
         P_throat = self.cc_pressure * (2/(self.k + 1))**(self.k/(self.k - 1))
-        print('Throat pressure: ' + str(P_throat))
+        if PRINT_DEBUG_ENGINE:
+            print('Throat pressure: ' + str(P_throat))
 
         # From a reverse-mogging of equation 3-25 of RPE
         P_exit = self.reverse_mog_exit_pressure(self.area_ratio, self.cc_pressure, self.k, choked=self.choked)
-        
-        print('Nozzle exit pressure: ' + str(P_exit))
+        if PRINT_DEBUG_ENGINE:
+            print('Nozzle exit pressure: ' + str(P_exit))
         if PRINT_DEBUG_SIM_VERBOSE:
             print('Area ratio sanity check: ' + str(self.area_ratio_mog_equation((P_exit/self.cc_pressure), self.k)))
 
         
         self.velocity_exit = ((2*self.k/(self.k - 1))*R*combusted_gas.T * \
                         (1 - (P_exit/self.cc_pressure)**((self.k-1/self.k))))**(0.5)
-        print('Nozzle exit velocity: ' + str(self.velocity_exit))
+        if PRINT_DEBUG_ENGINE:
+            print('Nozzle exit velocity: ' + str(self.velocity_exit))
 
         self.thrust = (self.throat_massflow)*self.velocity_exit * self.combustion_efficiency
 
@@ -470,9 +469,19 @@ class EngineModel:
 
         return self.thrust
 
+class MockLookupThermoModel():
+    
+    def __init__(self) -> None:
+        self.lookup_table = \
+                LookUpTable("OptimizationTemp\SG-TargetedTableOF_ratio" +\
+                "-temperature_K-pressure_Pa---0.1-15-0.25-273.3-273.3-0.1-1-10000000.0-25000.csv")
+
+    def sim_gas_mixture_combustion_temp(self, OF_ratio, temperature_K, pressure_Pa) -> float:
+        return self.lookup_table.lookup(OF_ratio, temperature_K, pressure_Pa)
+
+
+
 class HybridBurnSimulator:
-
-
     @staticmethod
     def sim_full_burn():
 
@@ -492,9 +501,14 @@ class HybridBurnSimulator:
 
         model_creation_end = perf_counter()
 
-        print("Model creation time: " + str(- model_creation_start + model_creation_end))
+        print("Engine model creation time: " + str(- model_creation_start + model_creation_end))
 
-        thermo_model = N2O_HTPB_ThermochemistryModel()
+        USE_REAL_THERMO_MODEL = False
+
+        if USE_REAL_THERMO_MODEL:
+            thermo_model = N2O_HTPB_ThermochemistryModel()
+        else:
+            thermo_model = MockLookupThermoModel()
 
         # area_ratio = EngineModel.area_ratio_mog_equation(0.1, 1.2)
         # p_e = engine_model.reverse_mog_exit_pressure(area_ratio, 100000, 1.2)
@@ -517,14 +531,14 @@ class HybridBurnSimulator:
         step_time_values = []
 
         sim_time = 0
-        INITIAL_SIM_STEP = 0.0001
+        INITIAL_SIM_STEP = 5e-5
         NUMERICAL_EPSILON = 1e-6
         step_count = 0 
 
         DEBUG_STEP_LIMIT = -99 # For halting the program a set amount of iterations in (negative values will run the simulation normally)
 
         # Setting this too low will throttle performance
-        GRAPH_UPDATE_INTERVAL = 1
+        GRAPH_UPDATE_INTERVAL = 2.5
 
 
 
@@ -612,7 +626,7 @@ class HybridBurnSimulator:
         
         prev_plot = perf_counter()
 
-        ADAPTIVE_STEP = True
+        ADAPTIVE_STEP = False
 
         # Absolute and relative errors for the variable being measured (currently pressure in Pa)
         # The error scale is thus atol + P*rtol
@@ -716,7 +730,8 @@ class HybridBurnSimulator:
                 thrust_value = engine_model.sim_burn(INITIAL_SIM_STEP, update_thermochem=sim_thermochem, external_tc_model=thermo_model)
                 cc_pressure_value = engine_model.cc_pressure
 
-            print('Simulation step compute time: ' + str(perf_counter() - step_start_time))
+            if PRINT_DEBUG_SIM_VERBOSE:
+                print('Simulation step compute time: ' + str(perf_counter() - step_start_time))
 
             sim_time += step_size
             step_count += 1
