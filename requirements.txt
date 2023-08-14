@@ -2,3 +2,4 @@ scipy
 sympy
 matplotlib
 cantera
+ruamel.yaml

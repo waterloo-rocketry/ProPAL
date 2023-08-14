@@ -2,6 +2,7 @@ _imports = 0 # Outline checkpoint
 
 from copy import deepcopy
 from time import perf_counter
+from ruamel.yaml import YAML
 
 import math
 import matplotlib.pyplot as plt
@@ -25,7 +26,13 @@ R = 360
 
 OUTPUT_FILE_PATH = "output.csv"
 
-
+try:
+    with open("input.yaml", "r") as file:
+        yaml = YAML(typ="safe")
+        config = yaml.load(file)
+except FileNotFoundError:
+    print("input.yaml file required")
+    raise SystemExit
 
 class CombustionChamberModel:
 
@@ -489,9 +496,10 @@ class HybridBurnSimulator:
 
         # Copy and pasted from the blowdown model code
 
-
-        NOS_tank_params = [0.04, 55, 288, 40, 0.15]
-
+        # V_0, P_0, T_0, m_0, basic_ullage
+        # NOS_tank_params = [0.04, 55, 288, 40, 0.15]
+        NOS_tank_params = [config["oxidiser"]["V_0"], config["oxidiser"]["P_0"], config["oxidiser"]["T_0"], \
+        config["oxidiser"]["m_0"], config["oxidiser"]["ullage"]]
 
         model_creation_start = perf_counter()
 
