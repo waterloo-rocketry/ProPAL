@@ -1,0 +1,6 @@
+oxidiser:
+  V_0: 0.04 # this is a comment that can be used to explain units, etc
+  P_0: 55
+  T_0: 288
+  m_0: 40
+  ullage: 0.15
