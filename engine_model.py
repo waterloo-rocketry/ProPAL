@@ -473,8 +473,8 @@ class MockLookupThermoModel():
     
     def __init__(self) -> None:
         self.lookup_table = \
-                LookUpTable("OptimizationTemp\SG-TargetedTableOF_ratio" +\
-                "-temperature_K-pressure_Pa---0.1-15-0.25-273.3-273.3-0.1-1-10000000.0-25000.csv")
+                LookUpTable(os.path.join(os.getcwd(), "OptimizationTemp", "SG-TargetedTableOF_ratio" +\
+                "-temperature_K-pressure_Pa---0.1-15-0.25-273.3-273.3-0.1-1-10000000.0-25000.csv"))
 
     def sim_gas_mixture_combustion_temp(self, OF_ratio, temperature_K, pressure_Pa) -> float:
         return self.lookup_table.lookup(OF_ratio, temperature_K, pressure_Pa)
