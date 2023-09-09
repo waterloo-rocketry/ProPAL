@@ -1,12 +1,13 @@
 oxidiser:
-  V_0: 0.04 # nos tank volume 
-  P_0: 55 # nos tank pressure
-  T_0: 288 # nos tank temperature
-  m_0: 40 # nos tank mass
-  ullage: 0.15 # nos tank ullage %
+  V_0: 0.0235 # nos tank volume 
+  P_0: -99 # nos tank pressure
+  T_0: 302.4 # nos tank temperature
+  m_0: -99 # nos tank mass
+  ullage: 0.1 # nos tank ullage %
 engine:
   area_ratio: 4.8 # engine area ratio
   throat_d: 0.039385 # throat diameter
   combust_e: 0.8 # combustion efficiency
 flags:
   external_tc: True # external thermochemical model
+  
