@@ -505,7 +505,7 @@ class HybridBurnSimulator:
 
         sim_tank_model = NOS_tank(*updated_tank_params)
         
-        engine_model = EngineModel(sim_tank_model, 4.8, 0.039385, 0.8, use_external_tc_model=True)
+        engine_model = EngineModel(sim_tank_model, config["engine"]["area_ratio"], config["engine"]["throat_d"], config["engine"]["combust_e"], use_external_tc_model=config["flags"]["external_tc"])
 
         model_creation_end = perf_counter()
 
