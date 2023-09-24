@@ -15,7 +15,6 @@ from ThermochemWrappers import N2O_HTPB_ThermochemistryModel
 PRINT_DEBUG_THERMOCHEM = False
 PRINT_DEBUG_COMB_CHAMBER = False
 PRINT_DEBUG_ENGINE = False
-
 PRINT_DEBUG_SIM = False
 PRINT_DEBUG_SIM_VERBOSE = False
 
@@ -33,6 +32,11 @@ try:
 except FileNotFoundError:
     print("input.yaml file required")
     raise SystemExit
+
+PRINT_DEBUG_THERMOCHEM |= config["flags"]["debug"]
+PRINT_DEBUG_COMB_CHAMBER |= config["flags"]["debug"]
+PRINT_DEBUG_ENGINE |= config["flags"]["debug"]
+PRINT_DEBUG_SIM |= config["flags"]["debug"]
 
 class CombustionChamberModel:
 
@@ -480,7 +484,7 @@ class MockLookupThermoModel():
     
     def __init__(self) -> None:
         self.lookup_table = \
-                LookUpTable(os.path.join(os.getcwd(), "OptimizationTemp", "SG-TargetedTableOF_ratio" +\
+                LookUpTable(os.path.join(os.getcwd(), "src", "OptimizationTemp", "SG-TargetedTableOF_ratio" +\
                 "-temperature_K-pressure_Pa---0.1-15-0.25-273.3-273.3-0.1-1-10000000.0-25000.csv"))
 
     def sim_gas_mixture_combustion_temp(self, OF_ratio, temperature_K, pressure_Pa) -> float:

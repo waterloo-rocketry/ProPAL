@@ -10,4 +10,5 @@ engine:
   combust_e: 0.8 # combustion efficiency
 flags:
   external_tc: True # external thermochemical model
-  
+  sim_type: hybrid # solid, hybrid, or liquic
+  debug: False
