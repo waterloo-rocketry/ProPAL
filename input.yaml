@@ -1,9 +1,9 @@
 oxidiser: # for hybrids and liquids
-  V_0: 0.0235 # nos tank volume 
-  P_0: -99 # nos tank pressure
-  T_0: 302.4 # nos tank temperature
-  m_0: -99 # nos tank mass
-  ullage: 0.1 # nos tank ullage %
+  V_0: 0.0235 # nitrous oxide tank volume 
+  P_0: -99 # nitrous oxide tank pressure
+  T_0: 302.4 # nitrous oxide tank temperature
+  m_0: -99 # nitrous oxide tank mass
+  ullage: 0.1 # nitrous oxide tank ullage %
 fuel: # for liquids only
   V_0: 0 # ethanol tank volume
   P_0: 0 # ethanol tank pressure
@@ -16,5 +16,5 @@ engine: # for all rockets
   combust_e: 0.8 # combustion efficiency
 flags: # for all rockets
   external_tc: True # external thermochemical model
-  sim_type: liquid # solid, hybrid, or liquid
+  sim_type: hybrid # solid, hybrid, or liquid
   debug: False

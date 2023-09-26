@@ -481,10 +481,8 @@ class NOS_tank:
         self.massflow = 0
         self.lagging_vaporized_mass = 0
 
-
-
-
-
+class EtOH_tank(NOS_tank):
+    pass
 
 if __name__ == "__main__":
     exit_flag = False

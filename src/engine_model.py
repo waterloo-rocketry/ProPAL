@@ -8,7 +8,7 @@ import math
 import matplotlib.pyplot as plt
 import os 
 
-from tank_blowdown_model import NOS_tank
+from tank_blowdown_model import NOS_tank, EtOH_tank
 from OptimizationTemp.simulation_generator import LookUpTable
 from ThermochemWrappers import N2O_HTPB_ThermochemistryModel
 
@@ -148,7 +148,7 @@ class CombustionChamberModel:
 
 class EngineModel:
 
-    def __init__(self, nos_tank_params, area_ratio, throat_diam, combustion_efficiency, use_external_tc_model=False) -> None:
+    def __init__(self, area_ratio, throat_diam, combustion_efficiency, nos_tank_params, etoh_tank_params, use_external_tc_model=False) -> None:
 
         if type(nos_tank_params) == NOS_tank:
             self.tank_model = nos_tank_params
@@ -498,22 +498,28 @@ class GenericBurnSimulator:
         # Copy and pasted from the blowdown model code
         # updated_tank_params = [0.0235, -99, 302.4, -99, 0.1]
         # old_tank_params = [0.04, 55, 288, 40, 0.15]
-        NOS_tank_params = [config["oxidiser"]["V_0"], config["oxidiser"]["P_0"], config["oxidiser"]["T_0"], \
-        config["oxidiser"]["m_0"], config["oxidiser"]["ullage"]]
-
         model_creation_start = perf_counter()
 
-        sim_tank_model = NOS_tank(*NOS_tank_params)
-        engine_model = EngineModel(sim_tank_model, config["engine"]["area_ratio"], config["engine"]["throat_d"], config["engine"]["combust_e"], use_external_tc_model=config["flags"]["external_tc"])
+        if config["flags"]["sim_type"] in ["hybrid", "liquid"]:
+            NOS_tank_params = [config["oxidiser"]["V_0"], config["oxidiser"]["P_0"], config["oxidiser"]["T_0"], \
+            config["oxidiser"]["m_0"], config["oxidiser"]["ullage"]]
+            sim_tank_model = NOS_tank(*NOS_tank_params)
+        else:
+            sim_tank_model = []
+
+        if config["flags"]["sim_type"] == "liquid":
+            EtOH_tank_params = [config["fuel"]["V_0"], config["fuel"]["P_0"], config["fuel"]["T_0"], \
+            config["fuel"]["m_0"], config["fuel"]["ullage"]]
+            fuel_tank_model = EtOH_tank(*EtOH_tank_params)
+        else:
+            fuel_tank_model = []
+
+        engine_model = EngineModel(config["engine"]["area_ratio"], config["engine"]["throat_d"], config["engine"]["combust_e"], \
+            sim_tank_model, fuel_tank_model, use_external_tc_model=config["flags"]["external_tc"])
+        thermo_model = N2O_HTPB_ThermochemistryModel() if config["flags"]["external_tc"] else MockLookupThermoModel()
 
         model_creation_end = perf_counter()
-
         print(f"Engine model creation time: {str(model_creation_end - model_creation_start)}s")
-
-        if config["flags"]["external_tc"]:
-            thermo_model = N2O_HTPB_ThermochemistryModel()
-        else:
-            thermo_model = MockLookupThermoModel()
 
         # area_ratio = EngineModel.area_ratio_mog_equation(0.1, 1.2)
         # p_e = engine_model.reverse_mog_exit_pressure(area_ratio, 100000, 1.2)
@@ -638,7 +644,7 @@ class GenericBurnSimulator:
 
         step_size = INITIAL_SIM_STEP
 
-
+        # beginning of actual simulation (as opposed to graphing)
         while sim_ok:
 
             sim_thermochem = True
@@ -659,7 +665,7 @@ class GenericBurnSimulator:
 
                     full_step_model = deepcopy(engine_model)
                     half_step_model = deepcopy(engine_model)
-
+                    # todo: modify sim_burn for liquid
                     full_step_model.sim_burn(step_size, update_thermochem=sim_thermochem,
                              external_tc_model=thermo_model)
 
@@ -737,7 +743,7 @@ class GenericBurnSimulator:
             sim_time += step_size
             step_count += 1
 
-            
+            # sim part ends here
             if perf_counter() - prev_plot > GRAPH_UPDATE_INTERVAL: 
                 plot1.set_data(timestamps, thrust_values)
                 plot2.set_data(timestamps, cc_pressure_values)
