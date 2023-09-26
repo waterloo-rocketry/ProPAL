@@ -877,8 +877,11 @@ class HybridBurnSimulator:
 
 
 if __name__ == '__main__':
-    HybridBurnSimulator.sim_full_burn()
-
-        
-
-
+    if config["flags"]["sim_type"] == "solid":
+        raise NotImplementedError("Solid simulation has not yet been implemented.")
+    elif config["flags"]["sim_type"] == "hybrid":
+        HybridBurnSimulator.sim_full_burn()
+    elif config["flags"]["sim_type"] == "liquid":
+        raise NotImplementedError("Liquid simulation has not yet been implemented.")
+    else:
+        raise RuntimeError("Invalid engine simulation type specified")
