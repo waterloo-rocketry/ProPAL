@@ -162,10 +162,10 @@ class EngineModel:
         self.area_ratio = area_ratio
         self.combusted_gas = 'not-simulated'
 
-        if not use_external_tc_model:
+        if use_external_tc_model:
             self.thermo_model = N2O_HTPB_ThermochemistryModel()
         else:
-            self.thermo_model = None
+            self.thermo_model = MockLookupThermoModel()
 
 
         self.cc_pressure = 101325 # Pa; initial pressure assumed to be atmospheric
@@ -492,32 +492,25 @@ class MockLookupThermoModel():
 
 
 
-class HybridBurnSimulator:
+class GenericBurnSimulator:
     @staticmethod
     def sim_full_burn():
-
-        updated_tank_params = [0.0235, -99, 302.4, -99, 0.1]
-
         # Copy and pasted from the blowdown model code
-
-        # V_0, P_0, T_0, m_0, basic_ullage
-        # NOS_tank_params = [0.04, 55, 288, 40, 0.15]
+        # updated_tank_params = [0.0235, -99, 302.4, -99, 0.1]
+        # old_tank_params = [0.04, 55, 288, 40, 0.15]
         NOS_tank_params = [config["oxidiser"]["V_0"], config["oxidiser"]["P_0"], config["oxidiser"]["T_0"], \
         config["oxidiser"]["m_0"], config["oxidiser"]["ullage"]]
 
         model_creation_start = perf_counter()
 
-        sim_tank_model = NOS_tank(*updated_tank_params)
-        
+        sim_tank_model = NOS_tank(*NOS_tank_params)
         engine_model = EngineModel(sim_tank_model, config["engine"]["area_ratio"], config["engine"]["throat_d"], config["engine"]["combust_e"], use_external_tc_model=config["flags"]["external_tc"])
 
         model_creation_end = perf_counter()
 
-        print("Engine model creation time: " + str(- model_creation_start + model_creation_end))
+        print(f"Engine model creation time: {str(model_creation_end - model_creation_start)}s")
 
-        USE_REAL_THERMO_MODEL = False
-
-        if USE_REAL_THERMO_MODEL:
+        if config["flags"]["external_tc"]:
             thermo_model = N2O_HTPB_ThermochemistryModel()
         else:
             thermo_model = MockLookupThermoModel()
@@ -526,7 +519,6 @@ class HybridBurnSimulator:
         # p_e = engine_model.reverse_mog_exit_pressure(area_ratio, 100000, 1.2)
         # print('remogged_ratio= ' + str(p_e/100000))
         
-
         sim_ok = True
         thrust_values = []
         cc_pressure_values = []
@@ -630,9 +622,8 @@ class HybridBurnSimulator:
             left = False,
             labelbottom=False,
             labelleft=False
-            )
+        )
     
-
 
         plt.show(block=False)
         
@@ -653,7 +644,6 @@ class HybridBurnSimulator:
             sim_thermochem = True
             if not ((step_count % 1) == 0):
                 sim_thermochem = False
-
             
 
             step_start_time = perf_counter()
@@ -719,7 +709,6 @@ class HybridBurnSimulator:
                         # No modification of step size required. 
                         iter_abort_flag = True
                         print(adaptive_step_iters)
-
 
 
                     if adaptive_step_iters >= 10:
@@ -873,15 +862,26 @@ class HybridBurnSimulator:
                 step_error_values.append(step_error)
                 step_time_values.append(step_size)
 
-            
+class SolidBurnSimulator(GenericBurnSimulator):
+    pass
+
+
+class HybridBurnSimulator(GenericBurnSimulator):
+    pass
+
+
+class LiquidBurnSimulator(GenericBurnSimulator):
+    pass
 
 
 if __name__ == '__main__':
     if config["flags"]["sim_type"] == "solid":
+        SolidBurnSimulator.sim_full_burn()
         raise NotImplementedError("Solid simulation has not yet been implemented.")
     elif config["flags"]["sim_type"] == "hybrid":
         HybridBurnSimulator.sim_full_burn()
     elif config["flags"]["sim_type"] == "liquid":
+        LiquidBurnSimulator.sim_full_burn()
         raise NotImplementedError("Liquid simulation has not yet been implemented.")
     else:
         raise RuntimeError("Invalid engine simulation type specified")

@@ -1,8 +1,10 @@
 import cantera as ct
+import os
 
 class N2O_HTPB_ThermochemistryModel:
 
     def __init__(self) -> None:
+        ct.add_directory(os.path.join(os.getcwd(), 'src', 'CanteraModels/'))
         self.gas_model = ct.Solution('Mevel2015-rocketry_modified.yaml')
     
     
